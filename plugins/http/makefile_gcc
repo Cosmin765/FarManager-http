@@ -1,0 +1,5 @@
+NAME = HTTP
+SRCS = HTTP.cpp
+
+include ../makefile_gcc_def_inc
+include ../makefile_gcc_target_inc

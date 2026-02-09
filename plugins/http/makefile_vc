@@ -1,0 +1,7 @@
+NAME = HTTP
+LINK_OBJS = $(INTDIR)\HTTP.obj
+
+!include ..\makefile_vc_def_inc
+!include ..\makefile_vc_target_inc
+
+$(INTDIR)\HTTP.obj: HTTP.cpp HTTPLng.hpp guid.hpp version.hpp $(COMINC)\plugin.hpp

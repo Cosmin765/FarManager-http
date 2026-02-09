@@ -42,3 +42,4 @@ __*.cmd
 #logs
 /plugins/**/*.log
 logs
+vcpkg_installed

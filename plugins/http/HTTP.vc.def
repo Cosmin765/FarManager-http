@@ -1,0 +1,11 @@
+LIBRARY        HTTP
+; DESCRIPTION    'HTTP Far Plugin'
+EXPORTS
+  GetGlobalInfoW
+  SetStartupInfoW
+  GetPluginInfoW
+  OpenW
+  GetFindDataW
+  GetOpenPanelInfoW
+  ProcessPanelInputW
+  PutFilesW

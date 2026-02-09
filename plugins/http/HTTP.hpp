@@ -1,0 +1,80 @@
+﻿#include <plugin.hpp>
+#include <initguid.h>
+#include <string_utils.hpp>
+#include <DlgBuilder.hpp>
+#include <PluginSettings.hpp>
+
+#include "curl/curl.h"
+
+#include "guid.hpp"
+#include "version.hpp"
+#include "HTTPLng.hpp"
+#include "structs.hpp"
+
+#include <list>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <span>
+#include <vector>
+#include <utility>
+#include <format>
+#include <filesystem>
+#include <assert.h>
+
+const wchar_t* GetMsg(int MsgId);
+
+using string = std::wstring;
+using string_view = std::wstring_view;
+
+extern PluginStartupInfo PsInfo;
+
+struct PluginPanel
+{
+	void clear()
+	{
+		Items.clear();
+		StringData.clear();
+		OwnerData.clear();
+	}
+
+	std::vector<PluginPanelItem> Items;
+	// Lists for stable item addresses
+	std::list<string> StringData;
+	std::list<string> OwnerData;
+};
+
+class HTTPclass
+{
+public:
+	HTTPclass();
+	~HTTPclass();
+
+	// Exports
+
+	void GetOpenPanelInfo(OpenPanelInfo* info);
+	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode);
+	bool PutFiles(std::span<const PluginPanelItem> Files, const wchar_t* SrcPath, OPERATION_MODES OpMode);
+
+	int ProcessKey(const INPUT_RECORD* rec);
+
+	// Internals
+
+	bool EnsureTemplatesPath();
+	bool IsValidTemplate(const PluginPanelItem& item);
+	bool LoadTemplateItems();
+	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
+
+	// sends the OPTION request for gathering the HTTP headers from the server
+	CURLcode ObtainHttpHeaders(const char* url);
+	// obtains the value for the content-type header
+	// a call to ObtainHttpHeaders needs to be made before calling this function
+	ContentType GetHTTPContentType();
+	// performs a GET request and saves the body to a specified file
+	CURLcode HttpDownload(const char* url, HANDLE fileHandle);
+	bool OpenURL(const char* url);
+
+private:
+	PluginPanel pp;
+	CURL* curl = nullptr;
+};

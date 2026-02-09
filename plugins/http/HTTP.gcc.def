@@ -1,0 +1,9 @@
+EXPORTS 
+   GetGlobalInfoW=GetGlobalInfoW@4
+   GetPluginInfoW=GetPluginInfoW@4
+   OpenW=OpenW@4
+   SetStartupInfoW=SetStartupInfoW@4
+   GetFindDataW=GetFindDataW@4
+   GetOpenPanelInfoW=GetOpenPanelInfoW@4
+   ProcessPanelInputW=ProcessPanelInputW@4
+   PutFilesW=PutFilesW@4
