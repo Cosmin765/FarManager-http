@@ -3,6 +3,7 @@
 #include <string_utils.hpp>
 #include <DlgBuilder.hpp>
 #include <PluginSettings.hpp>
+#include <scope_exit.hpp>
 
 #include "curl/curl.h"
 
@@ -21,6 +22,7 @@
 #include <format>
 #include <filesystem>
 #include <assert.h>
+#include <unordered_set>
 
 const wchar_t* GetMsg(int MsgId);
 
@@ -42,6 +44,18 @@ struct PluginPanel
 	// Lists for stable item addresses
 	std::list<string> StringData;
 	std::list<string> OwnerData;
+	std::unordered_set<string> AddedItems;
+};
+
+class HTTPTemplateDialog : public PluginDialogBuilder
+{
+public:
+	HTTPTemplateDialog();
+
+	bool ShowDialog();
+
+private:
+	HTTPTemplate httpTemplate;
 };
 
 class HTTPclass
@@ -55,13 +69,16 @@ public:
 	void GetOpenPanelInfo(OpenPanelInfo* info);
 	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode);
 	bool PutFiles(std::span<const PluginPanelItem> Files, const wchar_t* SrcPath, OPERATION_MODES OpMode);
-
 	int ProcessKey(const INPUT_RECORD* rec);
 
+private:
 	// Internals
 
+	void CheckLoadedTemplates();
 	bool EnsureTemplatesPath();
-	bool IsValidTemplate(const PluginPanelItem& item);
+	bool IsValidTemplate(const PluginPanelItem& item, bool verbose);
+	bool IsValidTemplateExtension(const wchar_t* templateName);
+	bool DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplate& httpTemplate, bool verbose = true);
 	bool LoadTemplateItems();
 	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
 
@@ -72,9 +89,10 @@ public:
 	ContentType GetHTTPContentType();
 	// performs a GET request and saves the body to a specified file
 	CURLcode HttpDownload(const char* url, HANDLE fileHandle);
-	bool OpenURL(const char* url);
+	bool OpenURL(const HTTPTemplate& httpTemplate, bool edit = false);
 
 private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
+	static constexpr wchar_t extension[] = L".htmpl";
 };

@@ -9,3 +9,4 @@ EXPORTS
   GetOpenPanelInfoW
   ProcessPanelInputW
   PutFilesW
+  ProcessSynchroEventW

@@ -1,8 +1,23 @@
 .Language=English,English
 
 "HTTP"
+"HTTP Argument"
 
 "OpenView"
 "OpenEdit"
 
+"GET"
+"POST"
+
+"&Query"
+"&Path"
+
+"&Add"
+"Remove &selected"
+"&Remove all"
+
 "&Ok"
+"&Cancel"
+
+"&Ask everytime"
+"Re&member"

@@ -104,18 +104,32 @@ bool HTTPclass::EnsureTemplatesPath()
 }
 
 
-bool HTTPclass::IsValidTemplate(const PluginPanelItem& item)
+bool HTTPclass::IsValidTemplateExtension(const wchar_t* templateName)
 {
-	static constexpr wchar_t extension[] = L".htmpl";
-
-	const wchar_t* fileName = item.FileName;
-	size_t nameLen = wcsnlen_s(fileName, MAX_PATH);
-
-	// check extension
+	size_t nameLen = wcsnlen_s(templateName, MAX_PATH);
 	size_t extLen = std::size(extension) - 1; // exclude null
 	if (nameLen < extLen)
 		return false;
-	if (_wcsicmp(fileName + nameLen - extLen, extension) != 0)
+	if (_wcsicmp(templateName + nameLen - extLen, extension) != 0)
+		return false;
+	return true;
+}
+
+
+bool HTTPclass::IsValidTemplate(const PluginPanelItem& item, bool vebose = false)
+{
+	const wchar_t* fileName = item.FileName;
+	
+	// check extension
+	if (!IsValidTemplateExtension(fileName))
+	{
+		if (vebose)
+			BasicErrorMessage({ L"Error", L"Template extension not valid", L"\x01", L"&Ok" });
+		return false;
+	}
+
+	HTTPTemplate tmpl;
+	if (!DeserializeTemplateFromFile(fileName, tmpl, vebose))
 		return false;
 
 	return true;
@@ -124,11 +138,6 @@ bool HTTPclass::IsValidTemplate(const PluginPanelItem& item)
 
 bool HTTPclass::LoadTemplateItems()
 {
-	static bool loaded = false;
-	// TODO: somehow reset this flag after the plugin has been exited
-	if (loaded)
-		return true;
-
 	PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 	const wchar_t* templatesPath = settings.Get(0, L"TemplatesPath", L"");
 	PluginPanelItem* ppi;
@@ -139,21 +148,48 @@ bool HTTPclass::LoadTemplateItems()
 	{
 		if (!IsValidTemplate(i))
 			continue;
+		string FileName = i.FileName;
+		if (pp.AddedItems.find(FileName) != pp.AddedItems.end())
+			continue;  // already added
+		pp.AddedItems.insert(FileName);
 		auto& newItem = pp.Items.emplace_back(i);
 		newItem.FileName = pp.StringData.emplace_back(newItem.FileName).c_str();
 		newItem.Owner = pp.OwnerData.emplace_back(NullToEmpty(newItem.Owner)).c_str();
+		newItem.AlternateFileName = {};  // access violation thrown if this is not set
 		//NewItem.UserData.Data = reinterpret_cast<void*>(m_Panel->Items.size() - 1);
 	}
 
 	PsInfo.FreeDirList(ppi, count);
 
-	loaded = true;
 	return true;
+}
+
+
+void HTTPclass::CheckLoadedTemplates()
+{
+	for (size_t i = 0; i < pp.Items.size();)
+	{
+		const auto& item = pp.Items[i];
+		DWORD dwAttrib = GetFileAttributes(item.FileName);
+		bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+		if (!isFile)
+		{
+			pp.Items.erase(pp.Items.begin() + i);
+			pp.AddedItems.erase(item.FileName);
+			// TODO: technically, we should also remove from pp.StringData, pp.OwnerData
+			// but I'm not going to worry about that right now
+		}
+		else
+		{
+			++i;
+		}
+	}
 }
 
 
 int HTTPclass::GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode)
 {
+	CheckLoadedTemplates();
 	if (!EnsureTemplatesPath())
 		return false;
 	if (!LoadTemplateItems())
@@ -167,15 +203,21 @@ int HTTPclass::GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, c
 
 bool HTTPclass::PutOneFile(const string& SrcPath, const PluginPanelItem& PanelItem)
 {
-	auto& NewItem = pp.Items.emplace_back(PanelItem);
-	auto& NewStr = pp.StringData.emplace_back(NewItem.FileName);
+	string FileName = PanelItem.FileName;
 	if (!SrcPath.empty() && !contains(PanelItem.FileName, L'\\'))
-		NewStr = concat(SrcPath, SrcPath.back() == L'\\'? L"" : L"\\", PanelItem.FileName);
+		FileName = concat(SrcPath, SrcPath.back() == L'\\'? L"" : L"\\", FileName);
 
-	NewItem.FileName = NewStr.c_str();
+	if (pp.AddedItems.find(FileName) != pp.AddedItems.end())
+		return false;  // already added
+	pp.AddedItems.insert(FileName);
+
+	auto& NewItem = pp.Items.emplace_back(PanelItem);
+	string& NewName = pp.StringData.emplace_back(FileName);
+
+	NewItem.FileName = NewName.c_str();
 	NewItem.AlternateFileName = {};
 	NewItem.Owner = pp.OwnerData.emplace_back(NullToEmpty(NewItem.Owner)).c_str();
-	NewItem.UserData.Data = reinterpret_cast<void*>(pp.Items.size() - 1);
+	//NewItem.UserData.Data = reinterpret_cast<void*>(pp.Items.size() - 1);
 
 	return true;
 }
@@ -188,7 +230,7 @@ bool HTTPclass::PutFiles(const std::span<const PluginPanelItem> Files, const wch
 		if (file.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			continue;  // skip directories for now
 
-		if (!IsValidTemplate(file))
+		if (!IsValidTemplate(file, true))
 			continue;
 
 		PutOneFile(SrcPath, file);
@@ -198,13 +240,24 @@ bool HTTPclass::PutFiles(const std::span<const PluginPanelItem> Files, const wch
 
 
 // the return value of this function needs to be freed using delete[]
-static wchar_t* AnsiToUnicode(const char* ansi, uint32_t codePage = CP_UTF8)
+static wchar_t* MultiByteToWideChar(const char* ansi, uint32_t codePage = CP_UTF8)
 {
 	int requiredSize = MultiByteToWideChar(codePage, 0, ansi, -1, NULL, 0); // get the required size
-	wchar_t* wideErrorMessage = new wchar_t[requiredSize + 1];
-	MultiByteToWideChar(CP_UTF8, 0, ansi, requiredSize, wideErrorMessage, requiredSize);
-	wideErrorMessage[requiredSize] = L'\0';
-	return wideErrorMessage;
+	wchar_t* wideStr = new wchar_t[requiredSize + 1];
+	MultiByteToWideChar(CP_UTF8, 0, ansi, requiredSize, wideStr, requiredSize);
+	wideStr[requiredSize] = L'\0';
+	return wideStr;
+}
+
+
+// the return value of this function needs to be freed using delete[]
+static char* WideCharToMultiByte(const wchar_t* unicode, uint32_t codePage = CP_UTF8)
+{
+	int requiredSize = WideCharToMultiByte(codePage, 0, unicode, -1, {}, 0, {}, {});
+	char* str = new char[requiredSize + 1];
+	WideCharToMultiByte(codePage, 0, unicode, -1, str, requiredSize, {}, {});
+	str[requiredSize] = '\0';
+	return str;
 }
 
 
@@ -227,9 +280,10 @@ static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void*
 	if (fileHandle == INVALID_HANDLE_VALUE)
 		return 0;
 
-	const size_t totalSize = size * nmemb;
 	DWORD written;
-	WriteFile(fileHandle, contents, (DWORD)nmemb, &written, NULL);
+	auto success = WriteFile(fileHandle, contents, (DWORD)nmemb, &written, NULL);
+	if (!success)
+		BasicErrorMessage({ L"Error", L"Error writing to temp file", L"\x01", L"&Ok" });
 	return written;
 }
 
@@ -308,6 +362,42 @@ constexpr auto check_control(unsigned const ControlState, unsigned const Mask)
 };
 
 
+bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplate& httpTemplate, bool verbose)
+{
+	HANDLE templateFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	SCOPE_EXIT{ CloseHandle(templateFile); };
+	DWORD bufferSize = GetFileSize(templateFile, NULL);
+	std::vector<uint8_t> templateBuffer(bufferSize);
+	DWORD bytesRead;
+	if (!ReadFile(templateFile, templateBuffer.data(), bufferSize, &bytesRead, NULL))
+	{
+		if (verbose)
+		{
+			wchar_t* errStr = LastWinAPIError();
+			BasicErrorMessage({ L"Error", L"Error reading from template file", filename, errStr, L"\x01", L"&Ok" });
+			LocalFree(errStr);
+		}
+		return false;
+	}
+
+	try
+	{
+		httpTemplate.Deserialize(templateBuffer);
+	}
+	catch (std::runtime_error e)
+	{
+		if (verbose)
+		{
+			wchar_t* errWide = MultiByteToWideChar(e.what());
+			BasicErrorMessage({ L"Error", L"Error deserializing from template file", filename, errWide, L"\x01", L"&Ok" });
+			delete[] errWide;
+		}
+		return false;
+	}
+	return true;
+}
+
+
 int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 {
 	if (Rec->EventType != KEY_EVENT)
@@ -318,30 +408,178 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 	const auto
 		NonePressed = check_control(ControlState, none_pressed),
-		//OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
+		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
 		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed);
 
-	if (NonePressed && Key == VK_F3)
+	if (NonePressed && (Key == VK_F3 || Key == VK_F4))
 	{
-		OpenURL("http://localhost:8000/sample2.json");
+		bool edit = Key == VK_F4;
+
+		if (const size_t Size = PsInfo.PanelControl(this, FCTL_GETCURRENTPANELITEM, 0, {}))
+		{
+			PluginPanelItem* ppi = (PluginPanelItem*)malloc(Size);
+			FarGetPluginPanelItem gpi{ sizeof(gpi), Size, ppi };
+			PsInfo.PanelControl(this, FCTL_GETCURRENTPANELITEM, 0, &gpi);
+			SCOPE_EXIT{ free(ppi); };
+
+			if (wcsncmp(ppi->FileName, TEXT(".."), MAX_PATH) == 0)
+				return FALSE; // not handled
+
+			HTTPTemplate httpTemplate;
+			if (!DeserializeTemplateFromFile(ppi->FileName, httpTemplate))
+				return TRUE;  // event was handled
+
+			OpenURL(httpTemplate, edit);
+		}
+
+		return TRUE;
+	}
+
+	if (OnlyAnyShiftPressed && Key == VK_F4)
+	{
+		// create the template file
+
+		intptr_t result = -1;
+		int okId = 0;
+		int cancelId = 1;
+
+		HTTPTemplate httpTemplate;
+		std::vector<HTTPArgument>& arguments = httpTemplate.arguments;
+		string filename;
+
+		int listSelectedArgument;
+		int selectedVerb;
+
+		do
+		{
+			HTTPTemplateDialog Builder;
+
+			Builder.AddText(TEXT("&Name"));
+			Builder.AddEditField(filename, 100, TEXT("Template_Name"), true);
+
+			Builder.AddText(TEXT("&URL"));
+			Builder.AddEditField(httpTemplate.url, 100, TEXT("Edit_URL"), true);
+
+			Builder.AddSeparator();
+
+			Builder.AddText(TEXT("&Verb"));
+			int verbMessageIds[] = { MVerbGET, MVerbPOST };
+			selectedVerb = 0;
+			Builder.AddRadioButtons(&selectedVerb, 2, verbMessageIds);
+
+			Builder.AddSeparator();
+
+			Builder.AddText(TEXT("Ar&guments"));
+
+			std::vector<const wchar_t*> argumentsStr;
+			argumentsStr.reserve(arguments.size());
+			for (const auto& argument : arguments)
+			{
+				argumentsStr.push_back(argument.name.c_str());
+			}
+			listSelectedArgument = -1;
+			Builder.AddListBox(&listSelectedArgument, 100, (int)std::min(argumentsStr.size() + 1, (size_t)5), argumentsStr.data(), argumentsStr.size(), DIF_NONE);
+
+			int buttonMessageIds[] = { MAdd, MRemoveSelected, MRemoveAll };
+			Builder.AddButtons(std::size(buttonMessageIds), buttonMessageIds, -1);
+			int addArgumentId = Builder.GetLastID() - 2;
+			int removeSelectedId = Builder.GetLastID() - 1;
+			int removeAllArgumentsId = Builder.GetLastID();
+
+			Builder.AddOKCancel(MOk, MCancel);
+
+			result = Builder.ShowDialogEx();
+
+			if (result == addArgumentId)
+			{
+				// configure argument
+				PluginDialogBuilder LocalBuilder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgument, TEXT("Argument"));
+
+				HTTPArgument argument;
+
+				LocalBuilder.AddText(TEXT("Name"));
+				LocalBuilder.AddEditField(argument.name, 100, TEXT("HTTP_Argument_Name"), true);
+
+				LocalBuilder.AddSeparator();
+
+				LocalBuilder.AddText(TEXT("Value"));
+				LocalBuilder.AddEditField(argument.value, 100, TEXT("HTTP_Argument_Value"), true);
+
+				LocalBuilder.AddSeparator();
+
+				LocalBuilder.AddText(TEXT("Type"));
+				int argType = 0;
+				int argTypes[] = { MArgQuery, MArgPath };
+				LocalBuilder.AddRadioButtons(&argType, std::size(argTypes), argTypes);
+
+				LocalBuilder.AddSeparator();
+
+				LocalBuilder.AddText(TEXT("Retention"));
+				int retention = 0;
+				int retentions[] = { MRetentionAsk, MRetentionRemember };
+				LocalBuilder.AddRadioButtons(&retention, std::size(retentions), retentions);
+
+				LocalBuilder.AddOKCancel(MOk, MCancel);
+
+				intptr_t localResult = LocalBuilder.ShowDialogEx();
+				if (localResult == okId)
+				{
+					argument.type = (HTTPArgumentType)argType;
+					argument.retention = (HTTPArgumentRetention)retention;
+					arguments.push_back(argument);
+				}
+			}
+			else if (result == removeSelectedId)
+			{
+				if (listSelectedArgument >= 0 && listSelectedArgument < (int)arguments.size())
+				{
+					arguments.erase(arguments.begin() + listSelectedArgument);
+				}
+			}
+			else if (result == removeAllArgumentsId)
+			{
+				arguments.clear();
+			}
+		}
+		while (result > cancelId);
+
+		httpTemplate.verb = (HTTPVerb)selectedVerb;
+
+		if (result == okId)
+		{
+			// save the template
+			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
+			string templatesPath = settings.Get(0, L"TemplatesPath", L"");
+			filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", filename);
+			if (!IsValidTemplateExtension(filename.c_str()))
+			{
+				filename = concat(filename, extension);
+			}
+
+			std::vector<uint8_t> templateBuffer;
+			httpTemplate.Serialize(templateBuffer);
+
+			HANDLE templateFile = CreateFile(filename.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+			if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
+			{
+				wchar_t* errStr = LastWinAPIError();
+				BasicErrorMessage({ L"Error", L"Error writing to template file", filename.c_str(), errStr, L"\x01", L"&Ok"});
+				LocalFree(errStr);
+			}
+			CloseHandle(templateFile);
+		}
+
+		PsInfo.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
+		PsInfo.PanelControl(this, FCTL_REDRAWPANEL, NULL, {});
+		//PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, this);  // TODO: implement thread that calls this from time to time
 		return TRUE;
 	}
 
 	return FALSE;
 }
 
-// TODO: for ineracting with the plugin (e.g. creating an endpoint file)
-//PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MViewWithOptions, L"Config");
-//Builder.AddText(MIncludeAdditionalInfo);
-//Builder.AddCheckbox(MInclEnvironment, &LocalOpt.ExportEnvironment);
-//Builder.AddCheckbox(MInclModuleInfo, &LocalOpt.ExportModuleInfo);
-//Builder.AddCheckbox(MInclModuleVersion, &LocalOpt.ExportModuleVersion);
-//Builder.AddCheckbox(MInclPerformance, &LocalOpt.ExportPerformance);
-//Builder.AddCheckbox(MInclHandles, &LocalOpt.ExportHandles);
-//Builder.AddCheckbox(MInclHandlesUnnamed, &LocalOpt.ExportHandlesUnnamed)->X1 += 4;
-//Builder.AddOKCancel(MOk, MCancel);
 
-bool HTTPclass::OpenURL(const char* Url)
+bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 {
 	if (!curl)  // not initialised
 	{
@@ -361,24 +599,28 @@ bool HTTPclass::OpenURL(const char* Url)
 		}
 	}
 
-	
-	ObtainHttpHeaders(Url);
-	const wchar_t* extension;
+	char* url = WideCharToMultiByte(httpTemplate.url.c_str());
+	// TODO: add arguments to the url
+	// TODO: handle post verb
+	SCOPE_EXIT{ delete[] url; };
+
+	ObtainHttpHeaders(url);
+	const wchar_t* fileExtension;
 	switch (GetHTTPContentType())
 	{
 	case ContentType::JSON:
-		extension = L".json";
+		fileExtension = L".json";
 		break;
 	case ContentType::HTML:
-		extension = L".html";
+		fileExtension = L".html";
 		break;
 	case ContentType::Other:
 	default:
-		extension = L"";
+		fileExtension = L"";
 	}
 
 	wchar_t tempFile[MAX_PATH];
-	if (!GetTempPathWithExtension(tempFile, MAX_PATH, extension))
+	if (!GetTempPathWithExtension(tempFile, MAX_PATH, fileExtension))
 	{
 		wchar_t* errorMessage = LastWinAPIError();
 		BasicErrorMessage({ L"Error", L"Could not reserve name for temp file", errorMessage, L"\x01", L"&Ok" });
@@ -396,21 +638,23 @@ bool HTTPclass::OpenURL(const char* Url)
 		return false;
 	}
 
-	CURLcode curlCode = HttpDownload(Url, fileHandle);
+	CURLcode curlCode = HttpDownload(url, fileHandle);
 	if (curlCode != CURLE_OK)
 	{
-		wchar_t* errorMessage = AnsiToUnicode(curl_easy_strerror(curlCode));
-		wchar_t* wideUrl = AnsiToUnicode(Url);
+		wchar_t* errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
+		const wchar_t* wideUrl = httpTemplate.url.c_str();
 		BasicErrorMessage({ L"HTTP error", wideUrl, errorMessage, L"\x01", L"&Ok" });
-		delete[] wideUrl;
 		delete[] errorMessage;
 		return false;
 	}
 
 	CloseHandle(fileHandle);
 
-	// open response buffer in editor
-	PsInfo.Editor(tempFile, tempFile, 0, 0, -1, -1, VF_NONE, 1, 1, CP_DEFAULT);
+	// open response buffer in viewer/editor
+	if (edit)
+		PsInfo.Editor(tempFile, tempFile, 0, 0, -1, -1, EF_NONE, 1, 1, CP_DEFAULT);
+	else
+		PsInfo.Viewer(tempFile, tempFile, 0, 0, -1, -1, VF_NONE, CP_DEFAULT);
 
 	// delete the temp file
 	bool retryDelete = true;

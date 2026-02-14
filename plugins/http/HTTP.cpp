@@ -54,18 +54,21 @@ intptr_t WINAPI PutFilesW(const PutFilesInfo* Info)
 	return static_cast<HTTPclass*>(Info->hPanel)->PutFiles({ Info->PanelItem, Info->ItemsNumber }, Info->SrcPath, Info->OpMode);
 }
 
+intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
+{
+	if (Info->Event != SE_COMMONSYNCHRO)
+		return 0;
+
+	HTTPclass* panel = static_cast<HTTPclass*>(Info->Param);
+	PsInfo.PanelControl(panel, FCTL_UPDATEPANEL, 1, {});
+	PsInfo.PanelControl(panel, FCTL_REDRAWPANEL, NULL, {});
+
+	return 1;
+}
+
+
 HANDLE WINAPI OpenW(const struct OpenInfo *OInfo)
 {
-	//FarPanelDirectory dirInfo{ sizeof(dirInfo), L"ceva"};
-	//Info.PanelControl(PANEL_PASSIVE, FCTL_SETPANELDIRECTORY, 0, &dirInfo);
-
-	// simple select menu
-	//std::vector<FarMenuItem> fmi(2);
-	//fmi[0] = FarMenuItem { .Flags = 0, .Text = L"Ceva" };
-	//fmi[1] = FarMenuItem { .Flags = 0, .Text = L"Altceva" };
-	//intptr_t BreakCode;
-	//FarKey BreakKeys[]{ { VK_RETURN, SHIFT_PRESSED }, {} };
-	//const auto ExitCode = Info.Menu(&MainGuid, {}, -1, -1, 0, FMENU_WRAPMODE, L"HTTP TEMP", {}, L"Contents", &BreakKeys[0], &BreakCode, fmi.data(), fmi.size());
 	auto hPlugin = std::make_unique<HTTPclass>();
 	return hPlugin.release();
 }

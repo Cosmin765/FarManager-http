@@ -33,6 +33,7 @@ enum struct HTTPArgumentRetention: uint8_t
 enum struct HTTPVerb: uint8_t
 {
 	GET,
+	POST,
 };
 
 template <typename T>

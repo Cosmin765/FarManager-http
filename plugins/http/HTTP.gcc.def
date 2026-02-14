@@ -7,3 +7,4 @@ EXPORTS
    GetOpenPanelInfoW=GetOpenPanelInfoW@4
    ProcessPanelInputW=ProcessPanelInputW@4
    PutFilesW=PutFilesW@4
+   ProcessSynchroEventW=ProcessSynchroEventW@4

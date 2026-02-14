@@ -1,8 +1,23 @@
 ﻿enum {
   MTitle,
+  MHTTPArgument,
 
   MOpenView,
   MOpenEdit,
 
-  MButton,
+  MVerbGET,
+  MVerbPOST,
+
+  MArgQuery,
+  MArgPath,
+
+  MAdd,
+  MRemoveSelected,
+  MRemoveAll,
+
+  MOk,
+  MCancel,
+
+  MRetentionAsk,
+  MRetentionRemember,
 };
