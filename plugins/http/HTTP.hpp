@@ -47,15 +47,33 @@ struct PluginPanel
 	std::unordered_set<string> AddedItems;
 };
 
+struct HTTPTemplateDialogData
+{
+	IN OUT HTTPTemplate httpTemplate;
+	IN OUT string filename;
+	IN OUT int listSelectedArgument = 0;
+	OUT int addArgumentId;
+	OUT int editSelectedId;
+	OUT int removeSelectedId;
+	OUT int removeAllArgumentsId;
+};
+
 class HTTPTemplateDialog : public PluginDialogBuilder
 {
 public:
 	HTTPTemplateDialog();
 
-	bool ShowDialog();
+	intptr_t ShowDialogEx(HTTPTemplateDialogData& data);
+};
 
-private:
-	HTTPTemplate httpTemplate;
+class HTTPArgumentDialog: public PluginDialogBuilder
+{
+public:
+	HTTPArgumentDialog();
+
+	intptr_t ShowDialogEx(
+		IN OUT HTTPArgument& argument
+	);
 };
 
 class HTTPclass

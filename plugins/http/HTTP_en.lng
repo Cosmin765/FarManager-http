@@ -2,6 +2,7 @@
 
 "HTTP"
 "HTTP Argument"
+"HTTP Argument Value"
 
 "OpenView"
 "OpenEdit"
@@ -13,7 +14,8 @@
 "&Path"
 
 "&Add"
-"Remove &selected"
+"&Edit selected"
+"Remo&ve selected"
 "&Remove all"
 
 "&Ok"

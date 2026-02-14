@@ -429,112 +429,100 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			if (!DeserializeTemplateFromFile(ppi->FileName, httpTemplate))
 				return TRUE;  // event was handled
 
+			for (auto& arg : httpTemplate.arguments)
+			{
+				if (arg.retention == HTTPArgumentRetention::AskEverytime)
+				{
+					PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgumentValue, TEXT("Argument_Retention"));
+
+					Builder.AddText(TEXT("&Name"));
+					Builder.AddReadonlyEditField(arg.name.c_str(), 100);
+
+					Builder.AddSeparator();
+
+					Builder.AddText(TEXT("&Value"));
+					string historyId = concat(TEXT("Argument_"), arg.name);
+					string newValue = arg.value;
+					Builder.AddEditField(newValue, 100, historyId.c_str(), false);
+
+					Builder.AddOKCancel(MOk, MCancel);
+
+					if (Builder.ShowDialog())
+					{
+						arg.value = newValue;
+					}
+					else
+					{
+						return TRUE;
+					}
+				}
+			}
+
 			OpenURL(httpTemplate, edit);
 		}
 
 		return TRUE;
 	}
 
-	if (OnlyAnyShiftPressed && Key == VK_F4)
+	if (Key == VK_F4 && (OnlyAnyShiftPressed || OnlyAnyAltPressed))
 	{
+		bool inPlaceEdit = OnlyAnyAltPressed;
+
 		// create the template file
 
 		intptr_t result = -1;
 		int okId = 0;
 		int cancelId = 1;
 
-		HTTPTemplate httpTemplate;
+		HTTPTemplateDialogData templateDlgData;
+		HTTPTemplate& httpTemplate = templateDlgData.httpTemplate;
 		std::vector<HTTPArgument>& arguments = httpTemplate.arguments;
-		string filename;
+		int& addArgumentId = templateDlgData.addArgumentId;
+		int& editArgumentId = templateDlgData.editSelectedId;
+		int& removeSelectedId = templateDlgData.removeSelectedId;
+		int& removeAllArgumentsId = templateDlgData.removeAllArgumentsId;
+		int& listSelectedArgument = templateDlgData.listSelectedArgument;
 
-		int listSelectedArgument;
-		int selectedVerb;
+		if (inPlaceEdit)
+		{
+			// load the current file into httpTemplate
+			if (const size_t Size = PsInfo.PanelControl(this, FCTL_GETCURRENTPANELITEM, 0, {}))
+			{
+				PluginPanelItem* ppi = (PluginPanelItem*)malloc(Size);
+				FarGetPluginPanelItem gpi{ sizeof(gpi), Size, ppi };
+				PsInfo.PanelControl(this, FCTL_GETCURRENTPANELITEM, 0, &gpi);
+				SCOPE_EXIT{ free(ppi); };
+
+				if (wcsncmp(ppi->FileName, TEXT(".."), MAX_PATH) == 0)
+					return FALSE; // not handled
+
+				if (!DeserializeTemplateFromFile(ppi->FileName, httpTemplate))
+					return TRUE;  // event was handled
+
+				templateDlgData.filename = std::filesystem::path(ppi->FileName).filename();
+			}
+		}
 
 		do
 		{
-			HTTPTemplateDialog Builder;
-
-			Builder.AddText(TEXT("&Name"));
-			Builder.AddEditField(filename, 100, TEXT("Template_Name"), true);
-
-			Builder.AddText(TEXT("&URL"));
-			Builder.AddEditField(httpTemplate.url, 100, TEXT("Edit_URL"), true);
-
-			Builder.AddSeparator();
-
-			Builder.AddText(TEXT("&Verb"));
-			int verbMessageIds[] = { MVerbGET, MVerbPOST };
-			selectedVerb = 0;
-			Builder.AddRadioButtons(&selectedVerb, 2, verbMessageIds);
-
-			Builder.AddSeparator();
-
-			Builder.AddText(TEXT("Ar&guments"));
-
-			std::vector<const wchar_t*> argumentsStr;
-			argumentsStr.reserve(arguments.size());
-			for (const auto& argument : arguments)
-			{
-				argumentsStr.push_back(argument.name.c_str());
-			}
-			listSelectedArgument = -1;
-			Builder.AddListBox(&listSelectedArgument, 100, (int)std::min(argumentsStr.size() + 1, (size_t)5), argumentsStr.data(), argumentsStr.size(), DIF_NONE);
-
-			int buttonMessageIds[] = { MAdd, MRemoveSelected, MRemoveAll };
-			Builder.AddButtons(std::size(buttonMessageIds), buttonMessageIds, -1);
-			int addArgumentId = Builder.GetLastID() - 2;
-			int removeSelectedId = Builder.GetLastID() - 1;
-			int removeAllArgumentsId = Builder.GetLastID();
-
-			Builder.AddOKCancel(MOk, MCancel);
-
-			result = Builder.ShowDialogEx();
-
+			result = HTTPTemplateDialog().ShowDialogEx(templateDlgData);
 			if (result == addArgumentId)
 			{
 				// configure argument
-				PluginDialogBuilder LocalBuilder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgument, TEXT("Argument"));
-
 				HTTPArgument argument;
-
-				LocalBuilder.AddText(TEXT("Name"));
-				LocalBuilder.AddEditField(argument.name, 100, TEXT("HTTP_Argument_Name"), true);
-
-				LocalBuilder.AddSeparator();
-
-				LocalBuilder.AddText(TEXT("Value"));
-				LocalBuilder.AddEditField(argument.value, 100, TEXT("HTTP_Argument_Value"), true);
-
-				LocalBuilder.AddSeparator();
-
-				LocalBuilder.AddText(TEXT("Type"));
-				int argType = 0;
-				int argTypes[] = { MArgQuery, MArgPath };
-				LocalBuilder.AddRadioButtons(&argType, std::size(argTypes), argTypes);
-
-				LocalBuilder.AddSeparator();
-
-				LocalBuilder.AddText(TEXT("Retention"));
-				int retention = 0;
-				int retentions[] = { MRetentionAsk, MRetentionRemember };
-				LocalBuilder.AddRadioButtons(&retention, std::size(retentions), retentions);
-
-				LocalBuilder.AddOKCancel(MOk, MCancel);
-
-				intptr_t localResult = LocalBuilder.ShowDialogEx();
-				if (localResult == okId)
-				{
-					argument.type = (HTTPArgumentType)argType;
-					argument.retention = (HTTPArgumentRetention)retention;
+				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
 					arguments.push_back(argument);
-				}
+			}
+			else if (result == editArgumentId)
+			{
+				HTTPArgument argument = arguments[listSelectedArgument];
+				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
+					arguments[listSelectedArgument] = argument;
 			}
 			else if (result == removeSelectedId)
 			{
 				if (listSelectedArgument >= 0 && listSelectedArgument < (int)arguments.size())
-				{
 					arguments.erase(arguments.begin() + listSelectedArgument);
-				}
 			}
 			else if (result == removeAllArgumentsId)
 			{
@@ -543,14 +531,12 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		}
 		while (result > cancelId);
 
-		httpTemplate.verb = (HTTPVerb)selectedVerb;
-
 		if (result == okId)
 		{
 			// save the template
 			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 			string templatesPath = settings.Get(0, L"TemplatesPath", L"");
-			filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", filename);
+			string filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", templateDlgData.filename);
 			if (!IsValidTemplateExtension(filename.c_str()))
 			{
 				filename = concat(filename, extension);
@@ -599,12 +585,74 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		}
 	}
 
-	char* url = WideCharToMultiByte(httpTemplate.url.c_str());
-	// TODO: add arguments to the url
-	// TODO: handle post verb
-	SCOPE_EXIT{ delete[] url; };
+	std::string pathArgs;
+	std::string queryArgs;
+	for (const HTTPArgument& argument : httpTemplate.arguments)
+	{
+		switch (argument.type)
+		{
+		case HTTPArgumentType::Query:
+			{
+				if (queryArgs.size() > 0)
+					queryArgs += "&";
 
-	ObtainHttpHeaders(url);
+				char* nameMb = WideCharToMultiByte(argument.value.c_str());
+				char* nameEscaped = curl_easy_escape(curl, nameMb, 0);
+
+				char* valueMb = WideCharToMultiByte(argument.value.c_str());
+				char* valueEscaped = curl_easy_escape(curl, valueMb, 0);
+
+				queryArgs += nameEscaped + std::string("=") + valueEscaped;
+
+				curl_free(valueEscaped);
+				delete[] valueMb;
+				curl_free(nameEscaped);
+				delete[] nameMb;
+			}
+			break;
+		case HTTPArgumentType::Path:
+			{
+				if (pathArgs.size() > 0)
+					pathArgs += "/";
+
+				char* valueMb = WideCharToMultiByte(argument.value.c_str());
+				char* valueEscaped = curl_easy_escape(curl, valueMb, 0);
+				pathArgs += valueEscaped;
+				curl_free(valueEscaped);
+				delete[] valueMb;
+			}
+			break;
+		default:
+			std::unreachable();
+		}
+	}
+
+	bool trailingSlashNeeded = httpTemplate.url.back() != TEXT('/') && pathArgs.size();
+	std::string url;
+	{
+		char* urlTemp = WideCharToMultiByte(httpTemplate.url.c_str());
+		SCOPE_EXIT{ delete[] urlTemp; };
+		url = std::string(urlTemp) +
+			(trailingSlashNeeded ? "/" : "") +
+			pathArgs +
+			(!trailingSlashNeeded && pathArgs.size() ? "/" : "") +  // preserve the initial slash
+			(queryArgs.size() ? "?" : "") +
+			queryArgs;
+	}
+
+	// TODO: handle post verb
+	// TODO: add progress for the loading screen
+	// TODO: implement fallback for HEAD method not being available
+
+	const auto screen = PsInfo.SaveScreen(0, 0, -1, -1);
+
+	wchar_t* wideUrl = MultiByteToWideChar(url.c_str());
+	const wchar_t* MsgItems[]{ TEXT("Reading from URL"), wideUrl };
+	PsInfo.Message(&MainGuid, {}, 0, {}, MsgItems, std::size(MsgItems), 0);
+	delete[] wideUrl;
+	SCOPE_EXIT{ PsInfo.RestoreScreen(screen); };
+
+	ObtainHttpHeaders(url.c_str());
 	const wchar_t* fileExtension;
 	switch (GetHTTPContentType())
 	{
@@ -638,7 +686,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		return false;
 	}
 
-	CURLcode curlCode = HttpDownload(url, fileHandle);
+	CURLcode curlCode = HttpDownload(url.c_str(), fileHandle);
 	if (curlCode != CURLE_OK)
 	{
 		wchar_t* errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));

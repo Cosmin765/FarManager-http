@@ -28,6 +28,7 @@ enum struct HTTPArgumentRetention: uint8_t
 {
 	AskEverytime,
 	Remember,
+	Clipboard,  // TODO: assess this, make it work only if AskEverytime is not present
 };
 
 enum struct HTTPVerb: uint8_t

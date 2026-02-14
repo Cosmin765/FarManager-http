@@ -1,6 +1,7 @@
 ﻿enum {
   MTitle,
   MHTTPArgument,
+  MHTTPArgumentValue,
 
   MOpenView,
   MOpenEdit,
@@ -12,6 +13,7 @@
   MArgPath,
 
   MAdd,
+  MEditSelected,
   MRemoveSelected,
   MRemoveAll,
 
