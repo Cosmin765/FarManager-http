@@ -382,7 +382,9 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 
 	try
 	{
-		httpTemplate.Deserialize(templateBuffer);
+		std::span<uint8_t> remaining = httpTemplate.Deserialize(templateBuffer);
+		if (remaining.size_bytes() > 0)
+			throw std::runtime_error("Residual buffer remained");
 	}
 	catch (std::runtime_error e)
 	{
@@ -596,7 +598,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 				if (queryArgs.size() > 0)
 					queryArgs += "&";
 
-				char* nameMb = WideCharToMultiByte(argument.value.c_str());
+				char* nameMb = WideCharToMultiByte(argument.name.c_str());
 				char* nameEscaped = curl_easy_escape(curl, nameMb, 0);
 
 				char* valueMb = WideCharToMultiByte(argument.value.c_str());
@@ -649,8 +651,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 	wchar_t* wideUrl = MultiByteToWideChar(url.c_str());
 	const wchar_t* MsgItems[]{ TEXT("Reading from URL"), wideUrl };
 	PsInfo.Message(&MainGuid, {}, 0, {}, MsgItems, std::size(MsgItems), 0);
-	delete[] wideUrl;
-	SCOPE_EXIT{ PsInfo.RestoreScreen(screen); };
+	SCOPE_EXIT{ delete[] wideUrl; PsInfo.RestoreScreen(screen); };
 
 	ObtainHttpHeaders(url.c_str());
 	const wchar_t* fileExtension;
@@ -690,7 +691,6 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 	if (curlCode != CURLE_OK)
 	{
 		wchar_t* errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
-		const wchar_t* wideUrl = httpTemplate.url.c_str();
 		BasicErrorMessage({ L"HTTP error", wideUrl, errorMessage, L"\x01", L"&Ok" });
 		delete[] errorMessage;
 		return false;
