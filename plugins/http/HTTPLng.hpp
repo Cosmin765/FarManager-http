@@ -2,6 +2,7 @@
   MTitle,
   MHTTPArgument,
   MHTTPArgumentValue,
+  MHTTPPostdata,
 
   MOpenView,
   MOpenEdit,

@@ -106,7 +106,7 @@ private:
 	// a call to ObtainHttpHeaders needs to be made before calling this function
 	ContentType GetHTTPContentType();
 	// performs a GET request and saves the body to a specified file
-	CURLcode HttpDownload(const char* url, HANDLE fileHandle);
+	CURLcode HttpDownload(const char* url, HANDLE fileHandle, HTTPVerb verb, const char* postdata);
 	bool OpenURL(const HTTPTemplate& httpTemplate, bool edit = false);
 
 private:

@@ -17,7 +17,7 @@ intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 
 	this->AddText(TEXT("&Verb"));
 	int verbMessageIds[] = { MVerbGET, MVerbPOST };
-	int selectedVerb = 0;
+	int selectedVerb = (int)data.httpTemplate.verb;
 	this->AddRadioButtons(&selectedVerb, std::size(verbMessageIds), verbMessageIds);
 
 	this->AddSeparator();
@@ -84,14 +84,14 @@ intptr_t HTTPArgumentDialog::ShowDialogEx(
 	this->AddSeparator();
 
 	this->AddText(TEXT("Type"));
-	int argType = 0;
+	int argType = (int)argument.type;
 	int argTypes[] = { MArgQuery, MArgPath };
 	this->AddRadioButtons(&argType, std::size(argTypes), argTypes);
 
 	this->AddSeparator();
 
 	this->AddText(TEXT("Retention"));
-	int retention = 0;
+	int retention = (int)argument.retention;
 	int retentions[] = { MRetentionAsk, MRetentionRemember };
 	this->AddRadioButtons(&retention, std::size(retentions), retentions);
 

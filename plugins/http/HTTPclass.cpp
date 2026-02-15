@@ -10,9 +10,24 @@ static inline const wchar_t* NullToEmpty(const wchar_t* Str)
 	return Str? Str : L"";
 }
 
+// send ACTL_SYNCHRO AdvControl events
+DWORD ThreadFunc(LPVOID classPtr)
+{
+	// TODO: add events - use ReadDirectoryChangesW (https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8)
+	for (;;)
+	{
+		PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, classPtr);
+		Sleep(1000);
+	}
+	return 0;
+}
+
 HTTPclass::HTTPclass() {
 	assert(test_StringSerializer());
 	assert(test_HTTPTemplateSerializer());
+
+	// TODO: store this handle somewhere
+	HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, this, 0, NULL);
 }
 
 HTTPclass::~HTTPclass() {
@@ -174,8 +189,8 @@ void HTTPclass::CheckLoadedTemplates()
 		bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 		if (!isFile)
 		{
-			pp.Items.erase(pp.Items.begin() + i);
 			pp.AddedItems.erase(item.FileName);
+			pp.Items.erase(pp.Items.begin() + i);
 			// TODO: technically, we should also remove from pp.StringData, pp.OwnerData
 			// but I'm not going to worry about that right now
 		}
@@ -189,9 +204,9 @@ void HTTPclass::CheckLoadedTemplates()
 
 int HTTPclass::GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode)
 {
-	CheckLoadedTemplates();
 	if (!EnsureTemplatesPath())
 		return false;
+	CheckLoadedTemplates(); // remove items if they do not exist anymore
 	if (!LoadTemplateItems())
 		return false;
 
@@ -274,20 +289,6 @@ static wchar_t* LastWinAPIError()
 }
 
 
-static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
-{
-	HANDLE fileHandle = static_cast<HANDLE>(userp);
-	if (fileHandle == INVALID_HANDLE_VALUE)
-		return 0;
-
-	DWORD written;
-	auto success = WriteFile(fileHandle, contents, (DWORD)nmemb, &written, NULL);
-	if (!success)
-		BasicErrorMessage({ L"Error", L"Error writing to temp file", L"\x01", L"&Ok" });
-	return written;
-}
-
-
 CURLcode HTTPclass::ObtainHttpHeaders(const char* url)
 {
 	curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -318,13 +319,67 @@ ContentType HTTPclass::GetHTTPContentType()
 }
 
 
-CURLcode HTTPclass::HttpDownload(const char* url, HANDLE fileHandle)
+static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
+{
+	HANDLE fileHandle = static_cast<HANDLE>(userp);
+
+	if (fileHandle == INVALID_HANDLE_VALUE)
+		return 0;
+
+	// TODO: add cancelling on esc
+
+	DWORD written;
+	auto success = WriteFile(fileHandle, contents, (DWORD)nmemb, &written, NULL);
+	if (!success)
+		BasicErrorMessage({ L"Error", L"Error writing to temp file", L"\x01", L"&Ok" });
+	return written;
+}
+
+
+static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+	auto sizeFormatted = std::format(TEXT("Downloaded {} bytes"), dltotal + dlnow);
+	wchar_t* url = reinterpret_cast<wchar_t*>(clientp);
+	const wchar_t* MsgItems[]{ TEXT("Reading from URL"), url, sizeFormatted.c_str() };
+	PsInfo.Message(&MainGuid, {}, 0, {}, MsgItems, std::size(MsgItems), 0);
+
+	//if (true)
+	//{
+	//	return 1;  // non-zero aborts transfer
+	//}
+
+	//return dltotal > (1 << 20);
+	return 0; // continue
+}
+
+
+CURLcode HTTPclass::HttpDownload(const char* url, HANDLE fileHandle, HTTPVerb verb, const char* postdata)
 {
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fileHandle);
-	curl_easy_setopt(curl, CURLOPT_NOBODY, 0);
+	curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlProgressCallback);
+
+	wchar_t* wideUrl = MultiByteToWideChar(url);
+	SCOPE_EXIT{ delete[] wideUrl; };
+
+	curl_easy_setopt(curl, CURLOPT_XFERINFODATA, wideUrl);
+	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+
+	switch (verb)
+	{
+	case HTTPVerb::GET:
+		curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+		break;
+	case HTTPVerb::POST:
+		curl_easy_setopt(curl, CURLOPT_POST, 1L);
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postdata);
+		break;
+	default:
+		std::unreachable();
+	}
 
 	CURLcode result = curl_easy_perform(curl);
 	return result;
@@ -476,7 +531,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		int okId = 0;
 		int cancelId = 1;
 
-		HTTPTemplateDialogData templateDlgData;
+		HTTPTemplateDialogData templateDlgData{};
 		HTTPTemplate& httpTemplate = templateDlgData.httpTemplate;
 		std::vector<HTTPArgument>& arguments = httpTemplate.arguments;
 		int& addArgumentId = templateDlgData.addArgumentId;
@@ -511,7 +566,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			if (result == addArgumentId)
 			{
 				// configure argument
-				HTTPArgument argument;
+				HTTPArgument argument{};
 				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
 					arguments.push_back(argument);
 			}
@@ -559,7 +614,6 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 		PsInfo.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
 		PsInfo.PanelControl(this, FCTL_REDRAWPANEL, NULL, {});
-		//PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, this);  // TODO: implement thread that calls this from time to time
 		return TRUE;
 	}
 
@@ -642,8 +696,6 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 			queryArgs;
 	}
 
-	// TODO: handle post verb
-	// TODO: add progress for the loading screen
 	// TODO: implement fallback for HEAD method not being available
 
 	const auto screen = PsInfo.SaveScreen(0, 0, -1, -1);
@@ -687,9 +739,32 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		return false;
 	}
 
-	CURLcode curlCode = HttpDownload(url.c_str(), fileHandle);
+	CURLcode curlCode;
+	if (httpTemplate.verb == HTTPVerb::POST)
+	{
+		string widePostdata;
+		PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPPostdata, TEXT("HTTP_Postdata"));
+		Builder.AddEditField(widePostdata, 100, {}, false);
+		Builder.AddOKCancel(MOk, MCancel);
+		if (!Builder.ShowDialog())
+			return false;  // cancelled
+
+		char* postdata = WideCharToMultiByte(widePostdata.c_str());
+		curlCode = HttpDownload(url.c_str(), fileHandle, httpTemplate.verb, postdata);
+		delete[] postdata;
+	}
+	else
+	{
+		curlCode = HttpDownload(url.c_str(), fileHandle, httpTemplate.verb, nullptr);
+	}
+
 	if (curlCode != CURLE_OK)
 	{
+		if (curlCode == CURLE_ABORTED_BY_CALLBACK)
+		{
+			// intentional cancel
+			return false;
+		}
 		wchar_t* errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
 		BasicErrorMessage({ L"HTTP error", wideUrl, errorMessage, L"\x01", L"&Ok" });
 		delete[] errorMessage;
