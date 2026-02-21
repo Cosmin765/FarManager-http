@@ -4,6 +4,7 @@
 "HTTP Argument"
 "HTTP Argument Value"
 "HTTP Postdata"
+"HTTP Header"
 
 "OpenView"
 "OpenEdit"
@@ -15,9 +16,14 @@
 "&Path"
 
 "&Add"
-"&Edit selected"
-"Remo&ve selected"
+"&Edit"
+"Remo&ve"
 "&Remove all"
+
+"Add"
+"Edit"
+"Remove"
+"Remove all"
 
 "&Ok"
 "&Cancel"
@@ -29,3 +35,5 @@
 
 "&Yes"
 "&No"
+
+"Response Headers"

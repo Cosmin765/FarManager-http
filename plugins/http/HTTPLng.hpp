@@ -3,6 +3,7 @@
   MHTTPArgument,
   MHTTPArgumentValue,
   MHTTPPostdata,
+  MHTTPHeader,
 
   MOpenView,
   MOpenEdit,
@@ -18,6 +19,11 @@
   MRemoveSelected,
   MRemoveAll,
 
+  MAddS,
+  MEditSelectedS,
+  MRemoveSelectedS,
+  MRemoveAllS,
+
   MOk,
   MCancel,
 
@@ -28,4 +34,6 @@
 
   MYes,
   MNo,
+
+  MResponseHeaders,
 };

@@ -10,3 +10,4 @@ EXPORTS
   ProcessPanelInputW
   PutFilesW
   ProcessSynchroEventW
+  ProcessEditorInputW

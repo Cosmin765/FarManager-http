@@ -8,6 +8,8 @@
 #include <utility>
 #include <stdexcept>
 
+#include "local_util.hpp"
+
 using string = std::wstring;
 using string_view = std::wstring_view;
 
@@ -107,11 +109,23 @@ struct HTTPArgument
 	bool operator==(const HTTPArgument&) const = default;
 };
 
+using Header = std::pair<string, string>;
+
+struct SListDeleter
+{
+	void operator()(curl_slist* p) const
+	{
+		if (p) curl_slist_free_all(p);
+	}
+};
+using SListPtr = std::unique_ptr<curl_slist, SListDeleter>;
+
 struct HTTPTemplate
 {
 	HTTPVerb verb;
 	string url;
 	std::vector<HTTPArgument> arguments;
+	std::vector<Header> requestHeaders;
 
 	void Serialize(std::vector<uint8_t>& buffer) const
 	{
@@ -120,6 +134,12 @@ struct HTTPTemplate
 		SerializeBasicType(buffer, arguments.size());
 		for (const auto& arg : arguments)
 			arg.Serialize(buffer);
+		SerializeBasicType(buffer, requestHeaders.size());
+		for (const auto& [name, value] : requestHeaders)
+		{
+			SerializeString(buffer, name);
+			SerializeString(buffer, value);
+		}
 	}
 
 	std::span<uint8_t> Deserialize(std::span<uint8_t> buffer)
@@ -131,7 +151,77 @@ struct HTTPTemplate
 		arguments.resize(size);
 		for (auto& arg : arguments)
 			buffer = arg.Deserialize(buffer);
+		buffer = DeserializeBasicType(buffer, size);
+		requestHeaders.resize(size);
+		for (auto& [name, value] : requestHeaders)
+		{
+			buffer = DeserializeString(buffer, name);
+			buffer = DeserializeString(buffer, value);
+		}
 		return buffer;
+	}
+
+	std::string GetFullUrl(CURL* curl) const
+	{
+		std::string pathArgs;
+		std::string queryArgs;
+		for (const HTTPArgument& argument : arguments)
+		{
+			switch (argument.type)
+			{
+			case HTTPArgumentType::Query:
+				{
+					if (queryArgs.size() > 0)
+						queryArgs += "&";
+
+					std::string name = WideCharToMultiByte(argument.name);
+					char* nameEscaped = curl_easy_escape(curl, name.c_str(), 0);
+
+					std::string value = WideCharToMultiByte(argument.value);
+					char* valueEscaped = curl_easy_escape(curl, value.c_str(), 0);
+
+					queryArgs += nameEscaped + std::string("=") + valueEscaped;
+
+					curl_free(valueEscaped);
+					curl_free(nameEscaped);
+				}
+				break;
+			case HTTPArgumentType::Path:
+				{
+					if (pathArgs.size() > 0)
+						pathArgs += "/";
+
+					std::string value = WideCharToMultiByte(argument.value);
+					char* valueEscaped = curl_easy_escape(curl, value.c_str(), 0);
+					pathArgs += valueEscaped;
+					curl_free(valueEscaped);
+				}
+				break;
+			default:
+				std::unreachable();
+			}
+		}
+
+		bool trailingSlashNeeded = url.back() != TEXT('/') && pathArgs.size();
+		std::string fullUrl = WideCharToMultiByte(url) +
+			(trailingSlashNeeded ? "/" : "") +
+			pathArgs +
+			(!trailingSlashNeeded && pathArgs.size() ? "/" : "") +  // preserve the initial slash
+			(queryArgs.size() ? "?" : "") +
+			queryArgs;
+		return fullUrl;
+	}
+
+	SListPtr GetHeadersList() const
+	{
+		curl_slist* list = NULL;
+
+		for (const auto& [name, value] : requestHeaders)
+		{
+			std::string headerStr = WideCharToMultiByte(name) + ":" + WideCharToMultiByte(value);
+			list = curl_slist_append(list, headerStr.c_str());
+		}
+		return SListPtr(list);
 	}
 
 	bool operator==(const HTTPTemplate&) const = default;

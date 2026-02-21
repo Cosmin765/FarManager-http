@@ -1,14 +1,6 @@
 ﻿#include "HTTP.hpp"
 
-static inline intptr_t BasicErrorMessage(std::initializer_list<const wchar_t*> items, int buttonsCount = 1)
-{
-	return PsInfo.Message(&MainGuid, NULL, FMSG_WARNING, L"Error", items.begin(), items.size(), buttonsCount);
-}
-
-static inline const wchar_t* NullToEmpty(const wchar_t* Str)
-{
-	return Str? Str : L"";
-}
+PluginStartupInfo PsInfo;
 
 // send ACTL_SYNCHRO AdvControl events
 DWORD ThreadFunc(LPVOID classPtr)
@@ -255,49 +247,18 @@ bool HTTPclass::PutFiles(const std::span<const PluginPanelItem> Files, const wch
 }
 
 
-// the return value of this function needs to be freed using delete[]
-static wchar_t* MultiByteToWideChar(const char* ansi, uint32_t codePage = CP_UTF8)
+CURLcode HTTPclass::ObtainHttpHeaders(const HTTPTemplate& httpTemplate)
 {
-	int requiredSize = MultiByteToWideChar(codePage, 0, ansi, -1, NULL, 0); // get the required size
-	wchar_t* wideStr = new wchar_t[requiredSize + 1];
-	MultiByteToWideChar(CP_UTF8, 0, ansi, requiredSize, wideStr, requiredSize);
-	wideStr[requiredSize] = L'\0';
-	return wideStr;
-}
-
-
-// the return value of this function needs to be freed using delete[]
-static char* WideCharToMultiByte(const wchar_t* unicode, uint32_t codePage = CP_UTF8)
-{
-	int requiredSize = WideCharToMultiByte(codePage, 0, unicode, -1, {}, 0, {}, {});
-	char* str = new char[requiredSize + 1];
-	WideCharToMultiByte(codePage, 0, unicode, -1, str, requiredSize, {}, {});
-	str[requiredSize] = '\0';
-	return str;
-}
-
-
-// get the string representation of the last WinAPI error
-// LocalFree() must be called on the return value once it's no longer needed
-static wchar_t* LastWinAPIError()
-{
-	DWORD errorCode = GetLastError();
-	LPWSTR errorMessage = NULL;
-	FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER, NULL, errorCode, 0, (LPWSTR)&errorMessage, 0, NULL);
-	if (errorMessage != NULL)
-		errorMessage[lstrlenW(errorMessage) - 2] = L'\0';  // get rid of \r\n
-	return errorMessage;
-}
-
-
-CURLcode HTTPclass::ObtainHttpHeaders(const char* url)
-{
+	std::string url = httpTemplate.GetFullUrl(curl);
 	// sends a HEAD request
 	curl_easy_setopt(curl, CURLOPT_URL, url);
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NULL);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, NULL);
 	curl_easy_setopt(curl, CURLOPT_NOBODY, 1);
+
+	SListPtr headers = httpTemplate.GetHeadersList();
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
 	CURLcode result = curl_easy_perform(curl);
 
@@ -333,6 +294,9 @@ ContentType HTTPclass::GetHTTPContentType()
 	else
 		return ContentType::Other;
 }
+
+
+// TODO: display the keybar for the editor
 
 
 static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
@@ -373,23 +337,24 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 }
 
 
-CURLcode HTTPclass::HttpDownload(const char* url, HANDLE fileHandle, HTTPVerb verb, const char* postdata)
+CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHandle, const char* postdata)
 {
-	curl_easy_setopt(curl, CURLOPT_URL, url);
+	std::string url = httpTemplate.GetFullUrl(curl);
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, fileHandle);
 	curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
 	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlProgressCallback);
 
-	wchar_t* wideUrl = MultiByteToWideChar(url);
-	currentDld.url = wideUrl;
-	SCOPE_EXIT{ delete[] wideUrl; currentDld.url = nullptr; };
+	string wideUrl = MultiByteToWideChar(url);
+	currentDld.url = wideUrl.c_str();
+	SCOPE_EXIT{ currentDld.url = nullptr; };
 
 	curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
-	switch (verb)
+	switch (httpTemplate.verb)
 	{
 	case HTTPVerb::GET:
 		curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
@@ -402,45 +367,22 @@ CURLcode HTTPclass::HttpDownload(const char* url, HANDLE fileHandle, HTTPVerb ve
 		std::unreachable();
 	}
 
+	SListPtr headers = httpTemplate.GetHeadersList();
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
+
 	CURLcode result = curl_easy_perform(curl);
 	return result;
 }
 
 
-static bool GetTempPathWithExtension(wchar_t* buffer, size_t bufferChars, const wchar_t* extension)
-{
-	wchar_t tempDir[MAX_PATH];
-	if (GetTempPath2W(MAX_PATH, tempDir) == 0)
-		return false;
-	if (GetTempFileNameW(tempDir, L"HTTPFAR", 0, buffer) == 0)
-		return false;
-	DeleteFileW(buffer);
-	size_t occupiedSize = wcsnlen_s(buffer, MAX_PATH);
-	wcscpy_s(buffer + occupiedSize, bufferChars - occupiedSize, extension);
-	return true;
-}
-
-
-static constexpr auto
-none_pressed = 0,
-any_ctrl_pressed = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED,
-any_alt_pressed = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED,
-any_shift_pressed = SHIFT_PRESSED;
-
-constexpr auto check_control(unsigned const ControlState, unsigned const Mask)
-{
-	constexpr auto ValidMask = any_ctrl_pressed | any_alt_pressed | any_shift_pressed;
-
-	const auto FilteredControlState = ControlState & ValidMask;
-	const auto OtherKeys = ValidMask & ~Mask;
-
-	return ((FilteredControlState & Mask) || !Mask) && !(FilteredControlState & OtherKeys);
-};
-
-
 bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplate& httpTemplate, bool verbose)
 {
 	HANDLE templateFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (templateFile == INVALID_HANDLE_VALUE)
+	{
+		BasicErrorMessage({ L"Error", L"Error opening template file", filename, LastWinAPIError().get(), L"\x01", L"&Ok"});
+		return false;
+	}
 	SCOPE_EXIT{ CloseHandle(templateFile); };
 	DWORD bufferSize = GetFileSize(templateFile, NULL);
 	std::vector<uint8_t> templateBuffer(bufferSize);
@@ -448,11 +390,7 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 	if (!ReadFile(templateFile, templateBuffer.data(), bufferSize, &bytesRead, NULL))
 	{
 		if (verbose)
-		{
-			wchar_t* errStr = LastWinAPIError();
-			BasicErrorMessage({ L"Error", L"Error reading from template file", filename, errStr, L"\x01", L"&Ok" });
-			LocalFree(errStr);
-		}
+			BasicErrorMessage({ L"Error", L"Error reading from template file", filename, LastWinAPIError().get(), L"\x01", L"&Ok"});
 		return false;
 	}
 
@@ -466,13 +404,76 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 	{
 		if (verbose)
 		{
-			wchar_t* errWide = MultiByteToWideChar(e.what());
-			BasicErrorMessage({ L"Error", L"Error deserializing from template file", filename, errWide, L"\x01", L"&Ok" });
-			delete[] errWide;
+			string errWide = MultiByteToWideChar(e.what());
+			BasicErrorMessage({ L"Error", L"Error deserializing from template file", filename, errWide.c_str(), L"\x01", L"&Ok"});
 		}
 		return false;
 	}
 	return true;
+}
+
+
+int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
+{
+	if (Rec->EventType != KEY_EVENT)
+		return FALSE;
+
+	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
+	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
+
+	const bool
+		NonePressed = check_control(ControlState, none_pressed),
+		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
+		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed);
+
+	if (NonePressed && Key == VK_F5)
+	{
+		// show response headers
+
+		if (WaitForSingleObject(showingHeaders, 0) == WAIT_OBJECT_0)
+		{
+			// already showing
+			return TRUE;
+		}
+		SetEvent(showingHeaders);
+		SCOPE_EXIT{ ResetEvent(showingHeaders); };
+
+		wchar_t headersFilepath[MAX_PATH + 1];
+		headersFilepath[MAX_PATH] = TEXT('\0');
+		if (!GetTempPathWithExtension(headersFilepath, MAX_PATH, TEXT(".headers")))
+		{
+			BasicErrorMessage({ L"Error", L"Could not reserve name for headers file", LastWinAPIError().get(), L"\x01", L"&Ok"});
+			return TRUE;
+		}
+
+		std::string buffer;
+		for (const auto& [name, value] : GetAllHeaders())
+		{
+			buffer += name + " -> " + value + "\n\n";
+		}
+
+		{
+			HANDLE hFile = CreateFile(headersFilepath, GENERIC_WRITE, FILE_SHARE_READ, {}, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, {});
+			if (hFile == INVALID_HANDLE_VALUE)
+			{
+				BasicErrorMessage({ L"Error", L"Could not create headers file", LastWinAPIError().get(), L"\x01", L"&Ok"});
+				return TRUE;
+			}
+			SCOPE_EXIT{ CloseHandle(hFile); };
+			DWORD written;
+			if (!WriteFile(hFile, buffer.c_str(), buffer.size(), &written, {}))
+			{
+				BasicErrorMessage({ L"Error", L"Could not reserve name for headers file", LastWinAPIError().get(), L"\x01", L"&Ok"});
+				return TRUE;
+			}
+		}
+
+		PsInfo.Editor(headersFilepath, headersFilepath, 0, 0, -1, -1, EF_DELETEONCLOSE, 1, 1, CP_DEFAULT);
+
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 
@@ -484,7 +485,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
 	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
 
-	const auto
+	const bool
 		NonePressed = check_control(ControlState, none_pressed),
 		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
 		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed);
@@ -598,11 +599,19 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		HTTPTemplateDialogData templateDlgData{};
 		HTTPTemplate& httpTemplate = templateDlgData.httpTemplate;
 		std::vector<HTTPArgument>& arguments = httpTemplate.arguments;
-		int& addArgumentId = templateDlgData.addArgumentId;
-		int& editArgumentId = templateDlgData.editSelectedId;
-		int& removeSelectedId = templateDlgData.removeSelectedId;
-		int& removeAllArgumentsId = templateDlgData.removeAllArgumentsId;
-		int& listSelectedArgument = templateDlgData.listSelectedArgument;
+		std::vector<Header>& requestHeaders = httpTemplate.requestHeaders;
+
+		int& addArgId = templateDlgData.addArgId;
+		int& editSelectedArgId = templateDlgData.editSelectedArgId;
+		int& removeSelectedArgId = templateDlgData.removeSelectedArgId;
+		int& removeAllArgsId = templateDlgData.removeAllArgsId;
+		int& listSelectedArg = templateDlgData.listSelectedArg;
+
+		int& addHeaderId = templateDlgData.addHeaderId;
+		int& editSelectedHeaderId = templateDlgData.editSelectedHeaderId;
+		int& removeSelectedHeaderId = templateDlgData.removeSelectedHeaderId;
+		int& removeAllHeadersId = templateDlgData.removeAllHeadersId;
+		int& listSelectedHeader = templateDlgData.listSelectedHeader;
 
 		if (inPlaceEdit)
 		{
@@ -627,27 +636,48 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		do
 		{
 			result = HTTPTemplateDialog().ShowDialogEx(templateDlgData);
-			if (result == addArgumentId)
+			if (result == addArgId)
 			{
 				// configure argument
 				HTTPArgument argument{};
 				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
 					arguments.push_back(argument);
 			}
-			else if (result == editArgumentId)
+			else if (result == editSelectedArgId)
 			{
-				HTTPArgument argument = arguments[listSelectedArgument];
+				HTTPArgument argument = arguments[listSelectedArg];
 				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
-					arguments[listSelectedArgument] = argument;
+					arguments[listSelectedArg] = argument;
 			}
-			else if (result == removeSelectedId)
+			else if (result == removeSelectedArgId)
 			{
-				if (listSelectedArgument >= 0 && listSelectedArgument < (int)arguments.size())
-					arguments.erase(arguments.begin() + listSelectedArgument);
+				if (listSelectedArg >= 0 && listSelectedArg < (int)arguments.size())
+					arguments.erase(arguments.begin() + listSelectedArg);
 			}
-			else if (result == removeAllArgumentsId)
+			else if (result == removeAllArgsId)
 			{
 				arguments.clear();
+			}
+			else if (result == addHeaderId)
+			{
+				Header requestHeader;
+				if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
+					requestHeaders.push_back(requestHeader);
+			}
+			else if (result == editSelectedHeaderId)
+			{
+				Header requestHeader = requestHeaders[listSelectedHeader];
+				if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
+					requestHeaders[listSelectedHeader] = requestHeader;
+			}
+			else if (result == removeSelectedHeaderId)
+			{
+				if (listSelectedHeader >= 0 && listSelectedHeader < (int)requestHeaders.size())
+					arguments.erase(arguments.begin() + listSelectedHeader);
+			}
+			else if (result == removeAllHeadersId)
+			{
+				requestHeaders.clear();
 			}
 		}
 		while (result > cancelId);
@@ -659,27 +689,27 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			string templatesPath = settings.Get(0, L"TemplatesPath", L"");
 			string filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", templateDlgData.filename);
 			if (!IsValidTemplateExtension(filename.c_str()))
-			{
 				filename = concat(filename, extension);
-			}
 
 			std::vector<uint8_t> templateBuffer;
 			httpTemplate.Serialize(templateBuffer);
 
 			HANDLE templateFile = CreateFile(filename.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-			if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
+			if (templateFile == INVALID_HANDLE_VALUE)
+				BasicErrorMessage({ L"Error", L"Error creating template file", filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
+			else
 			{
-				wchar_t* errStr = LastWinAPIError();
-				BasicErrorMessage({ L"Error", L"Error writing to template file", filename.c_str(), errStr, L"\x01", L"&Ok"});
-				LocalFree(errStr);
+				if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
+					BasicErrorMessage({ L"Error", L"Error writing to template file", filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
+				CloseHandle(templateFile);
 			}
-			CloseHandle(templateFile);
 		}
 
-		PsInfo.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
-		PsInfo.PanelControl(this, FCTL_REDRAWPANEL, NULL, {});
 		return TRUE;
 	}
+
+	// TODO: display status code in some way
+	// Have a general info key, which also displays other stuff?
 
 	return FALSE;
 }
@@ -687,7 +717,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 {
-	//SCOPE_EXIT{ SetEvent(synchroEventFree); };
+	SCOPE_EXIT{ SetEvent(synchroEventFree); };
 	switch (event->type)
 	{
 	case SynchroEventType::UPDATE_PANEL:
@@ -724,7 +754,6 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 	default:
 		std::unreachable();
 	}
-	SetEvent(synchroEventFree);
 	return 1;
 }
 
@@ -751,7 +780,6 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 	SetEvent(dldInProgress);
 	SCOPE_EXIT{ ResetEvent(dldInProgress); };
 
-	// TODO: allow specifying request headers in the template
 	if (!curl)  // not initialised
 	{
 		CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -770,71 +798,18 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		}
 	}
 
-	std::string pathArgs;
-	std::string queryArgs;
-	for (const HTTPArgument& argument : httpTemplate.arguments)
-	{
-		switch (argument.type)
-		{
-		case HTTPArgumentType::Query:
-			{
-				if (queryArgs.size() > 0)
-					queryArgs += "&";
-
-				char* nameMb = WideCharToMultiByte(argument.name.c_str());
-				char* nameEscaped = curl_easy_escape(curl, nameMb, 0);
-
-				char* valueMb = WideCharToMultiByte(argument.value.c_str());
-				char* valueEscaped = curl_easy_escape(curl, valueMb, 0);
-
-				queryArgs += nameEscaped + std::string("=") + valueEscaped;
-
-				curl_free(valueEscaped);
-				delete[] valueMb;
-				curl_free(nameEscaped);
-				delete[] nameMb;
-			}
-			break;
-		case HTTPArgumentType::Path:
-			{
-				if (pathArgs.size() > 0)
-					pathArgs += "/";
-
-				char* valueMb = WideCharToMultiByte(argument.value.c_str());
-				char* valueEscaped = curl_easy_escape(curl, valueMb, 0);
-				pathArgs += valueEscaped;
-				curl_free(valueEscaped);
-				delete[] valueMb;
-			}
-			break;
-		default:
-			std::unreachable();
-		}
-	}
-
-	bool trailingSlashNeeded = httpTemplate.url.back() != TEXT('/') && pathArgs.size();
-	std::string url;
-	{
-		char* urlTemp = WideCharToMultiByte(httpTemplate.url.c_str());
-		SCOPE_EXIT{ delete[] urlTemp; };
-		url = std::string(urlTemp) +
-			(trailingSlashNeeded ? "/" : "") +
-			pathArgs +
-			(!trailingSlashNeeded && pathArgs.size() ? "/" : "") +  // preserve the initial slash
-			(queryArgs.size() ? "?" : "") +
-			queryArgs;
-	}
+	std::string url = httpTemplate.GetFullUrl(curl);
 
 	// TODO: implement fallback for HEAD method not being available
 
 	SynchroDataEvent<HANDLE> saveScreenEvent(SynchroEventType::SAVE_SCREEN);
 	SendSynchroEvent(&saveScreenEvent);
 
-	wchar_t* wideUrl = MultiByteToWideChar(url.c_str());
+	string wideUrl = MultiByteToWideChar(url);
 
 	SynchroFunctionEvent displayMsgEvent([&](void*)
 		{
-			const wchar_t* MsgItems[]{ TEXT("Reading from URL"), wideUrl };
+			const wchar_t* MsgItems[]{ TEXT("Reading from URL"), wideUrl.c_str() };
 			PsInfo.Message(&MainGuid, &DldInfoMsg, 0, TEXT("DldInfo"), MsgItems, std::size(MsgItems), 0);
 		});
 	SendSynchroEvent(&displayMsgEvent);
@@ -843,10 +818,9 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		SynchroDataEvent<HANDLE>& restoreScreenEvent = saveScreenEvent;
 		restoreScreenEvent.type = SynchroEventType::RESTORE_SCREEN;
 		SendSynchroEvent(&restoreScreenEvent);  // this restores the screen
-		delete[] wideUrl;
 	};
 
-	ObtainHttpHeaders(url.c_str());
+	ObtainHttpHeaders(httpTemplate);
 	const wchar_t* fileExtension;
 	switch (GetHTTPContentType())
 	{
@@ -861,24 +835,55 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		fileExtension = L"";
 	}
 
-	wchar_t tempFile[MAX_PATH];
+	wchar_t tempFile[MAX_PATH + 1];
+	tempFile[MAX_PATH] = TEXT('\0');
 	if (!GetTempPathWithExtension(tempFile, MAX_PATH, fileExtension))
 	{
-		wchar_t* errorMessage = LastWinAPIError();
-		BasicErrorMessage({ L"Error", L"Could not reserve name for temp file", errorMessage, L"\x01", L"&Ok" });
-		LocalFree(errorMessage);
+		BasicErrorMessage({ L"Error", L"Could not reserve name for temp file", LastWinAPIError().get(), L"\x01", L"&Ok"});
 		return false;
 	}
 
-	HANDLE fileHandle = CreateFileW(tempFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+	HANDLE fileHandle = CreateFile(tempFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
 
 	if (fileHandle == INVALID_HANDLE_VALUE)
 	{
-		wchar_t* errorMessage = LastWinAPIError();
-		BasicErrorMessage({ L"Error", L"Could not create temp file", tempFile, errorMessage, L"\x01", L"&Ok" });
-		LocalFree(errorMessage);
+		BasicErrorMessage({ L"Error", L"Could not create temp file", tempFile, LastWinAPIError().get(), L"\x01", L"&Ok"});
 		return false;
 	}
+
+	// delete the temp file
+	SCOPE_EXIT{
+		if (fileHandle != INVALID_HANDLE_VALUE)
+			CloseHandle(fileHandle);  // release it in case it wasn't
+
+		bool retryDelete = true;
+		while (retryDelete)
+		{
+			if (!DeleteFileW(tempFile))
+			{
+				DWORD errorCode = GetLastError();
+				if (errorCode == ERROR_FILE_NOT_FOUND)
+					break;
+				intptr_t choice = BasicErrorMessage({ L"Error", L"Could not delete temp file", tempFile, LastWinAPIError().get(), L"\x01", L"&Retry", L"&Ignore" }, 2);
+				switch (choice)
+				{
+				case 0: // retry
+					break;
+				case -1: // escape key
+				case 1: // ignore
+					retryDelete = false;
+					break;
+				default:
+					std::unreachable();
+					break;
+				}
+			}
+			else
+			{
+				retryDelete = false;
+			}
+		}
+	};
 
 	CURLcode curlCode;
 	if (httpTemplate.verb == HTTPVerb::POST)
@@ -898,13 +903,12 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 		if (!dlgResult)
 			return false;  // cancelled
 
-		char* postdata = WideCharToMultiByte(widePostdata.c_str());
-		curlCode = HttpDownload(url.c_str(), fileHandle, httpTemplate.verb, postdata);
-		delete[] postdata;
+		std::string postdata = WideCharToMultiByte(widePostdata);
+		curlCode = HttpDownload(httpTemplate, fileHandle, postdata.c_str());
 	}
 	else
 	{
-		curlCode = HttpDownload(url.c_str(), fileHandle, httpTemplate.verb, nullptr);
+		curlCode = HttpDownload(httpTemplate, fileHandle, nullptr);
 	}
 
 	if (curlCode != CURLE_OK)
@@ -914,58 +918,23 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 			// intentional cancel
 			return false;
 		}
-		wchar_t* errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
-		BasicErrorMessage({ L"HTTP error", wideUrl, errorMessage, L"\x01", L"&Ok" });
-		delete[] errorMessage;
+		string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
+		BasicErrorMessage({ L"HTTP error", wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok"});
 		return false;
 	}
 
 	CloseHandle(fileHandle);
+	fileHandle = INVALID_HANDLE_VALUE;
 
 	SynchroFunctionEvent openEvent([&](void*)
 		{
 			// open response buffer in viewer/editor
-			// TODO: show headers in the viewer/editor with a F-key, implement ProcessViewerEventW
 			if (edit)
 				PsInfo.Editor(tempFile, tempFile, 0, 0, -1, -1, EF_NONE, 1, 1, CP_DEFAULT);
 			else
 				PsInfo.Viewer(tempFile, tempFile, 0, 0, -1, -1, VF_NONE, CP_DEFAULT);
-
-			// TODO: check this out:
-			//PsInfo.DialogInit()
 		});
 	SendSynchroEvent(&openEvent);
-
-	// delete the temp file
-	bool retryDelete = true;
-	while (retryDelete)
-	{
-		if (!DeleteFileW(tempFile))
-		{
-			DWORD errorCode = GetLastError();
-			if (errorCode == ERROR_FILE_NOT_FOUND)
-				break;
-			wchar_t* errorMessage = LastWinAPIError();
-			intptr_t choice = BasicErrorMessage({ L"Error", L"Could not delete temp file", tempFile, errorMessage, L"\x01", L"&Retry", L"&Ignore" }, 2);
-			LocalFree(errorMessage);
-			switch (choice)
-			{
-			case 0: // retry
-				break;
-			case -1: // escape key
-			case 1: // ignore
-				retryDelete = false;
-				break;
-			default:
-				std::unreachable();
-				break;
-			}
-		}
-		else
-		{
-			retryDelete = false;
-		}
-	}
 
 	return true;
 }

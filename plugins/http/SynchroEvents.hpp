@@ -10,6 +10,7 @@
 struct SynchroEvent
 {
 	SynchroEventType type;
+	bool heap = false;
 
 	SynchroEvent(SynchroEventType _type) : type(_type) {};
 	virtual ~SynchroEvent() = default;

@@ -1,9 +1,7 @@
 ﻿#include "HTTP.hpp"
 
 HTTPTemplateDialog::HTTPTemplateDialog()
-	: PluginDialogBuilder(PsInfo, MainGuid, ConfigDialogGuid, MTitle, TEXT("Template"))
-{}
-
+	: PluginDialogBuilder(PsInfo, MainGuid, ConfigDialogGuid, MTitle, TEXT("Template")) {}
 
 intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 {
@@ -45,15 +43,40 @@ intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 		);
 		argumentsStrPointers.push_back(argumentStr.c_str());
 	}
-	data.listSelectedArgument = -1;
-	this->AddListBox(&data.listSelectedArgument, 100, (int)std::min(argumentsStr.size() + 1, (size_t)5), argumentsStrPointers.data(), argumentsStr.size(), DIF_NONE);
+	data.listSelectedArg = -1;
+	this->AddListBox(&data.listSelectedArg, 100, (int)std::min(argumentsStrPointers.size() + 1, (size_t)5), argumentsStrPointers.data(), argumentsStrPointers.size(), DIF_WORDWRAP);
 
-	int buttonMessageIds[] = { MAdd, MEditSelected, MRemoveSelected, MRemoveAll };
-	this->AddButtons(std::size(buttonMessageIds), buttonMessageIds, -1);
-	data.addArgumentId = this->GetLastID() - 3;
-	data.editSelectedId = this->GetLastID() - 2;
-	data.removeSelectedId = this->GetLastID() - 1;
-	data.removeAllArgumentsId = this->GetLastID();
+	int argsButtonMessageIds[] = { MAdd, MEditSelected, MRemoveSelected, MRemoveAll };
+	this->AddButtons(std::size(argsButtonMessageIds), argsButtonMessageIds, -1);
+	data.addArgId = this->GetLastID() - 3;
+	data.editSelectedArgId = this->GetLastID() - 2;
+	data.removeSelectedArgId = this->GetLastID() - 1;
+	data.removeAllArgsId = this->GetLastID();
+
+	this->AddSeparator();
+
+	this->AddText(TEXT("&Headers"));
+
+	std::list<string> headersStr;
+	std::vector<const wchar_t*> headersStrPointers;
+	headersStrPointers.reserve(data.httpTemplate.requestHeaders.size());
+
+	for (const auto& [name, value] : data.httpTemplate.requestHeaders)
+	{
+		const auto& headerStr = argumentsStr.emplace_back(
+			std::format(TEXT("{} | {}"), name, value)
+		);
+		headersStrPointers.push_back(headerStr.c_str());
+	}
+
+	this->AddListBox(&data.listSelectedHeader, 100, (int)std::min(headersStrPointers.size() + 1, (size_t)5), headersStrPointers.data(), headersStrPointers.size(), DIF_WORDWRAP);
+
+	int headersButtonMessageIds[] = { MAddS, MEditSelectedS, MRemoveSelectedS, MRemoveAllS };
+	this->AddButtons(std::size(headersButtonMessageIds), headersButtonMessageIds, -1);
+	data.addHeaderId = this->GetLastID() - 3;
+	data.editSelectedHeaderId = this->GetLastID() - 2;
+	data.removeSelectedHeaderId = this->GetLastID() - 1;
+	data.removeAllHeadersId = this->GetLastID();
 
 	this->AddOKCancel(MOk, MCancel);
 
@@ -64,10 +87,7 @@ intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 
 
 HTTPArgumentDialog::HTTPArgumentDialog()
-	: PluginDialogBuilder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgument, TEXT("Argument"))
-{
-}
-
+	: PluginDialogBuilder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgument, TEXT("Argument")) {}
 
 intptr_t HTTPArgumentDialog::ShowDialogEx(
 	IN OUT HTTPArgument& argument
@@ -101,4 +121,27 @@ intptr_t HTTPArgumentDialog::ShowDialogEx(
 	argument.type = (HTTPArgumentType)argType;
 	argument.retention = (HTTPArgumentRetention)retention;
 	return result;
+}
+
+
+HTTPRequestHeaderDialog::HTTPRequestHeaderDialog()
+	: PluginDialogBuilder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPHeader, TEXT("RequestHeaders")) {}
+
+
+intptr_t HTTPRequestHeaderDialog::ShowDialogEx(
+	IN OUT Header& requestHeader
+)
+{
+	auto& [headerName, headerValue] = requestHeader;
+	this->AddText(TEXT("&Name"));
+	this->AddEditField(headerName, 100, TEXT("HTTP_Header_Name"), true);
+
+	this->AddSeparator();
+
+	this->AddText(TEXT("&Value"));
+	this->AddEditField(headerValue, 100, TEXT("HTTP_Header_Value"), true);
+
+	this->AddOKCancel(MOk, MCancel);
+
+	return PluginDialogBuilder::ShowDialogEx();
 }

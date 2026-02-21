@@ -1,6 +1,5 @@
 ﻿#include "HTTP.hpp"
 
-struct PluginStartupInfo PsInfo;
 HANDLE PanelHandle;
 
 void WINAPI GetGlobalInfoW(struct GlobalInfo *GInfo)
@@ -12,11 +11,6 @@ void WINAPI GetGlobalInfoW(struct GlobalInfo *GInfo)
 	GInfo->Title=PLUGIN_NAME;
 	GInfo->Description=PLUGIN_DESC;
 	GInfo->Author=PLUGIN_AUTHOR;
-}
-
-const wchar_t *GetMsg(int MsgId)
-{
-	return PsInfo.GetMsg(&MainGuid,MsgId);
 }
 
 void WINAPI SetStartupInfoW(const struct PluginStartupInfo *psi)
@@ -66,12 +60,20 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 }
 
 
-intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
+intptr_t WINAPI ProcessEditorInputW(const struct ProcessEditorInputInfo* Info)
 {
-	// TODO: implement this using PanelHandle
-	//Info->
-	return 0;
+	return static_cast<HTTPclass*>(PanelHandle)->ProcessEditorKey(&Info->Rec);
 }
+
+
+//intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
+//{
+//	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
+//	
+//	//VE_READ
+//	//Info->Param
+//	return 0;
+//}
 
 
 HANDLE WINAPI OpenW(const struct OpenInfo *OInfo)
