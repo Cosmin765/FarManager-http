@@ -48,7 +48,11 @@ public:
 	int ProcessKey(const INPUT_RECORD* Rec);
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
 	intptr_t ProcessSynchroEventW(SynchroEvent* event);
-	void SendSynchroEvent(SynchroEvent* event, bool block = true);
+
+	// send blocking event to synchro
+	void SendSynchroEvent(const SynchroEvent& event);
+	// send async event to synchro
+	void SendSynchroEvent(SynchroEvent&& event);
 
 private:
 	// Internals
@@ -77,6 +81,7 @@ public:
 	DldThreadData currentDld;
 	HANDLE dldCancel = CreateEvent({}, TRUE, FALSE, {});
 	HANDLE dldRun = CreateEvent({}, TRUE, TRUE, {});
+	HANDLE dldDone = CreateEvent({}, FALSE, TRUE, {});
 
 private:
 	PluginPanel pp;

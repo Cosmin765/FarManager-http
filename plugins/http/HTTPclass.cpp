@@ -319,15 +319,12 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 	if (dlnow == 0)
 		return 0;  // little quirk of libcurl, clientp is invalid
 
-	// TODO: make it possible to specify only a rvalue for an event, that way it doesn't have to be blocking
 	HTTPclass* panel = reinterpret_cast<HTTPclass*>(clientp);
 
 	WaitForSingleObject(panel->dldRun, INFINITE);
 
 	panel->currentDld.dlnow = dlnow;
 	panel->currentDld.dltotal = dltotal;
-	SynchroEvent event(SynchroEventType::SHOW_PROGRESS);
-	panel->SendSynchroEvent(&event);
 
 	if (WaitForSingleObject(panel->dldCancel, 0) == WAIT_OBJECT_0)
 	{
@@ -370,7 +367,34 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	SListPtr headers = httpTemplate.GetHeadersList();
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
+	ResetEvent(dldDone);
+	HANDLE progressShowThread = CreateThread({}, 0, [](void* data) -> DWORD
+		{
+			HTTPclass* panel = static_cast<HTTPclass*>(data);
+
+			for (;;)
+			{
+				WaitForSingleObject(panel->dldRun, INFINITE);
+				bool cancelled = WaitForSingleObject(panel->dldCancel, 0) == WAIT_OBJECT_0;
+				bool done = WaitForSingleObject(panel->dldDone, 0) == WAIT_OBJECT_0;
+				if (cancelled || done)
+					break;
+				panel->SendSynchroEvent(SynchroEventType::SHOW_PROGRESS);
+				Sleep(100);
+			}
+			return 0;
+		}, this, {}, {});
+
+	
 	CURLcode result = curl_easy_perform(curl);
+	SetEvent(dldDone);
+
+	if (progressShowThread != INVALID_HANDLE_VALUE)
+	{
+		WaitForSingleObject(progressShowThread, INFINITE);
+		CloseHandle(progressShowThread);
+	}
+
 	return result;
 }
 
@@ -511,7 +535,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 						}
 						SetEvent(panel->dldRun);  // allow the download thread to run
 					});
-				panel->SendSynchroEvent(&cancelDialogEvent);
+				panel->SendSynchroEvent(cancelDialogEvent);
 
 				return 0;
 			};
@@ -717,7 +741,13 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 {
-	SCOPE_EXIT{ SetEvent(synchroEventFree); };
+	SCOPE_EXIT{
+		if (event->heap)
+			delete event;
+		else
+			SetEvent(synchroEventFree);
+	};
+
 	switch (event->type)
 	{
 	case SynchroEventType::UPDATE_PANEL:
@@ -742,6 +772,8 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 			const auto& dlnow = currentDld.dlnow;
 			const auto& dltotal = currentDld.dltotal;
 			const auto& url = currentDld.url;
+			if (dltotal == 0)
+				break;
 			string sizeFormatted = std::format(TEXT("Downloaded {} / {} bytes [{:.2f}%]"), dlnow, dltotal, 100 * (float)dlnow / (float)dltotal);
 			const wchar_t* MsgItems[]{ TEXT("Reading from URL"), url, sizeFormatted.c_str() };
 			PsInfo.Message(&MainGuid, &ProgressMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
@@ -758,19 +790,23 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 }
 
 
-void HTTPclass::SendSynchroEvent(SynchroEvent* event, bool block)
+void HTTPclass::SendSynchroEvent(const SynchroEvent& event)
 {
-	if (block)
-	{
-		WaitForSingleObject(synchroMutex, INFINITE);
-		ResetEvent(synchroEventFree);
-	}
-	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, event);
-	if (block)
-	{
-		WaitForSingleObject(synchroEventFree, INFINITE);
-		ReleaseMutex(synchroMutex);
-	}
+	WaitForSingleObject(synchroMutex, INFINITE);
+	ResetEvent(synchroEventFree);
+
+	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, const_cast<SynchroEvent*>(&event));
+
+	WaitForSingleObject(synchroEventFree, INFINITE);
+	ReleaseMutex(synchroMutex);
+}
+
+
+void HTTPclass::SendSynchroEvent(SynchroEvent&& event)
+{
+	SynchroEvent* heapEvent = new SynchroEvent(event);
+	heapEvent->heap = true;
+	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, heapEvent);
 }
 
 
@@ -803,7 +839,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 	// TODO: implement fallback for HEAD method not being available
 
 	SynchroDataEvent<HANDLE> saveScreenEvent(SynchroEventType::SAVE_SCREEN);
-	SendSynchroEvent(&saveScreenEvent);
+	SendSynchroEvent(saveScreenEvent);
 
 	string wideUrl = MultiByteToWideChar(url);
 
@@ -812,12 +848,12 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 			const wchar_t* MsgItems[]{ TEXT("Reading from URL"), wideUrl.c_str() };
 			PsInfo.Message(&MainGuid, &DldInfoMsg, 0, TEXT("DldInfo"), MsgItems, std::size(MsgItems), 0);
 		});
-	SendSynchroEvent(&displayMsgEvent);
+	SendSynchroEvent(displayMsgEvent);
 
 	SCOPE_EXIT{
 		SynchroDataEvent<HANDLE>& restoreScreenEvent = saveScreenEvent;
 		restoreScreenEvent.type = SynchroEventType::RESTORE_SCREEN;
-		SendSynchroEvent(&restoreScreenEvent);  // this restores the screen
+		SendSynchroEvent(restoreScreenEvent);  // this restores the screen
 	};
 
 	ObtainHttpHeaders(httpTemplate);
@@ -898,7 +934,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 				Builder.AddOKCancel(MOk, MCancel);
 				dlgResult = Builder.ShowDialog();
 			});
-		SendSynchroEvent(&postdataEvent);
+		SendSynchroEvent(postdataEvent);
 
 		if (!dlgResult)
 			return false;  // cancelled
@@ -934,7 +970,7 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 			else
 				PsInfo.Viewer(tempFile, tempFile, 0, 0, -1, -1, VF_NONE, CP_DEFAULT);
 		});
-	SendSynchroEvent(&openEvent);
+	SendSynchroEvent(openEvent);
 
 	return true;
 }
