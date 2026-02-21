@@ -3,24 +3,11 @@
 PluginStartupInfo PsInfo;
 
 // send ACTL_SYNCHRO AdvControl events
-DWORD ThreadFunc(LPVOID classPtr)
-{
-	// TODO: add events - use ReadDirectoryChangesW (https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8)
-	for (;;)
-	{
-		PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, classPtr);
-		Sleep(1000);
-	}
-	return 0;
-}
+// TODO: add events - use ReadDirectoryChangesW (https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8) to monitor for changes
 
 HTTPclass::HTTPclass() {
 	assert(test_StringSerializer());
 	assert(test_HTTPTemplateSerializer());
-
-	// TODO: store this handle somewhere
-	// TODO: convert to functional style
-	//HANDLE hThread = CreateThread(NULL, 0, ThreadFunc, this, 0, NULL);
 }
 
 HTTPclass::~HTTPclass() {
@@ -379,7 +366,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 				bool done = WaitForSingleObject(panel->dldDone, 0) == WAIT_OBJECT_0;
 				if (cancelled || done)
 					break;
-				panel->SendSynchroEvent(SynchroEventType::SHOW_PROGRESS);
+				panel->SendSynchroEvent(std::make_unique<SynchroEvent>(SynchroEventType::SHOW_PROGRESS));
 				Sleep(100);
 			}
 			return 0;
@@ -389,7 +376,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	CURLcode result = curl_easy_perform(curl);
 	SetEvent(dldDone);
 
-	if (progressShowThread != INVALID_HANDLE_VALUE)
+	if (progressShowThread != NULL)
 	{
 		WaitForSingleObject(progressShowThread, INFINITE);
 		CloseHandle(progressShowThread);
@@ -521,27 +508,19 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		if (!dlding)
 			return FALSE;
 
-		auto cancelDialog = [](void* data) -> DWORD
+		std::unique_ptr<SynchroEvent> cancelDialogEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
 			{
-				HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
-				SynchroFunctionEvent cancelDialogEvent([&](void*)
-					{
-						ResetEvent(panel->dldRun);
-						PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MCancelDownload, TEXT("Download_Cancel"), {}, {}, FDLG_WARNING);
-						Builder.AddOKCancel(MYes, MNo);
-						if (Builder.ShowDialog())
-						{
-							SetEvent(panel->dldCancel);
-						}
-						SetEvent(panel->dldRun);  // allow the download thread to run
-					});
-				panel->SendSynchroEvent(cancelDialogEvent);
+				ResetEvent(dldRun);
+				PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MCancelDownload, TEXT("Download_Cancel"), {}, {}, FDLG_WARNING);
+				Builder.AddOKCancel(MYes, MNo);
+				if (Builder.ShowDialog())
+				{
+					SetEvent(dldCancel);
+				}
+				SetEvent(dldRun);  // allow the download thread to run
+			});
+		SendSynchroEvent(std::move(cancelDialogEvent)); // execute async
 
-				return 0;
-			};
-
-		// TODO: save this
-		CreateThread({}, {}, cancelDialog, this, {}, {});
 		return TRUE;
 	}
 
@@ -595,16 +574,24 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				}
 			}
 
-			auto func = [](void* data) -> DWORD {
-				HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
-				const auto& dldData = panel->currentDld;
-				panel->OpenURL(dldData.httpTemplate, dldData.edit);
-				return 0;
-				};
-
-			// TODO: don't leave this dangling
 			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
-			hDldThread = CreateThread(NULL, 0, func, this, 0, NULL);
+
+			if (hDldThread != NULL)
+			{
+				WaitForSingleObject(hDldThread, INFINITE);  // just in case
+				CloseHandle(hDldThread);
+			}
+			SetEvent(dldInProgress);
+			hDldThread = CreateThread({}, {}, [](void* data) -> DWORD
+				{
+					HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
+					const auto& dldData = panel->currentDld;
+					panel->OpenURL(dldData.httpTemplate, dldData.edit);
+					return 0;
+				}, this, {}, {});
+
+			if (hDldThread == NULL)
+				BasicErrorMessage({ L"Error", L"Error creating download thread", LastWinAPIError().get(), L"\x01", L"&Ok" });
 		}
 
 		return TRUE;
@@ -802,18 +789,16 @@ void HTTPclass::SendSynchroEvent(const SynchroEvent& event)
 }
 
 
-void HTTPclass::SendSynchroEvent(SynchroEvent&& event)
+void HTTPclass::SendSynchroEvent(std::unique_ptr<SynchroEvent> event)
 {
-	SynchroEvent* heapEvent = new SynchroEvent(event);
-	heapEvent->heap = true;
-	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, heapEvent);
+	event->heap = true;
+	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, event.release());
 }
 
 
 bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 {
 	ResetEvent(dldCancel);
-	SetEvent(dldInProgress);
 	SCOPE_EXIT{ ResetEvent(dldInProgress); };
 
 	if (!curl)  // not initialised

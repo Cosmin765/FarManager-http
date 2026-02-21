@@ -52,7 +52,7 @@ public:
 	// send blocking event to synchro
 	void SendSynchroEvent(const SynchroEvent& event);
 	// send async event to synchro
-	void SendSynchroEvent(SynchroEvent&& event);
+	void SendSynchroEvent(std::unique_ptr<SynchroEvent> event);
 
 private:
 	// Internals
@@ -86,7 +86,7 @@ public:
 private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
-	HANDLE hDldThread = INVALID_HANDLE_VALUE;
+	HANDLE hDldThread = NULL;
 	HANDLE synchroEventFree = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE dldInProgress = CreateEvent({}, TRUE, FALSE, {});
