@@ -23,4 +23,9 @@
 
   MRetentionAsk,
   MRetentionRemember,
+
+  MCancelDownload,
+
+  MYes,
+  MNo,
 };

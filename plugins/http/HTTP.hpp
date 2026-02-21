@@ -11,6 +11,7 @@
 #include "version.hpp"
 #include "HTTPLng.hpp"
 #include "structs.hpp"
+#include "SynchroEvents.hpp"
 
 #include <list>
 #include <memory>
@@ -30,6 +31,7 @@ using string = std::wstring;
 using string_view = std::wstring_view;
 
 extern PluginStartupInfo PsInfo;
+extern HANDLE PanelHandle;
 
 struct PluginPanel
 {
@@ -76,6 +78,15 @@ public:
 	);
 };
 
+struct DldThreadData
+{
+	HTTPTemplate httpTemplate;
+	bool edit = false;
+	wchar_t* url = nullptr;
+	curl_off_t dlnow = 0;
+	curl_off_t dltotal = 0;
+};
+
 class HTTPclass
 {
 public:
@@ -88,6 +99,8 @@ public:
 	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode);
 	bool PutFiles(std::span<const PluginPanelItem> Files, const wchar_t* SrcPath, OPERATION_MODES OpMode);
 	int ProcessKey(const INPUT_RECORD* rec);
+	intptr_t ProcessSynchroEventW(SynchroEvent* event);
+	void SendSynchroEvent(SynchroEvent* event, bool block = true);
 
 private:
 	// Internals
@@ -100,8 +113,11 @@ private:
 	bool LoadTemplateItems();
 	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
 
-	// sends the OPTION request for gathering the HTTP headers from the server
+	// sends the HEAD request for gathering the HTTP headers from the server
 	CURLcode ObtainHttpHeaders(const char* url);
+	// returns a vector of pairs of all the headers
+	// useful for displaying but computationally expensive
+	std::vector<std::pair<std::string, std::string>> GetAllHeaders();
 	// obtains the value for the content-type header
 	// a call to ObtainHttpHeaders needs to be made before calling this function
 	ContentType GetHTTPContentType();
@@ -109,8 +125,18 @@ private:
 	CURLcode HttpDownload(const char* url, HANDLE fileHandle, HTTPVerb verb, const char* postdata);
 	bool OpenURL(const HTTPTemplate& httpTemplate, bool edit = false);
 
+public:
+	DldThreadData currentDld;
+	HANDLE dldCancel = CreateEvent({}, TRUE, FALSE, {});
+	HANDLE dldRun = CreateEvent({}, TRUE, TRUE, {});
+
 private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
+	HANDLE hDldThread = INVALID_HANDLE_VALUE;
+	HANDLE synchroEventFree = CreateEvent({}, TRUE, TRUE, {});
+	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
+	HANDLE dldInProgress = CreateEvent({}, TRUE, FALSE, {});
+
 	static constexpr wchar_t extension[] = L".htmpl";
 };

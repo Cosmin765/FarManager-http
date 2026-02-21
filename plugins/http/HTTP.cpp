@@ -1,6 +1,7 @@
 ﻿#include "HTTP.hpp"
 
 struct PluginStartupInfo PsInfo;
+HANDLE PanelHandle;
 
 void WINAPI GetGlobalInfoW(struct GlobalInfo *GInfo)
 {
@@ -59,16 +60,23 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 	if (Info->Event != SE_COMMONSYNCHRO)
 		return 0;
 
-	HTTPclass* panel = static_cast<HTTPclass*>(Info->Param);
-	PsInfo.PanelControl(panel, FCTL_UPDATEPANEL, 1, {});
-	PsInfo.PanelControl(panel, FCTL_REDRAWPANEL, NULL, {});
+	SynchroEvent* event = static_cast<SynchroEvent*>(Info->Param);
+	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
+	return panel->ProcessSynchroEventW(event);
+}
 
-	return 1;
+
+intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
+{
+	// TODO: implement this using PanelHandle
+	//Info->
+	return 0;
 }
 
 
 HANDLE WINAPI OpenW(const struct OpenInfo *OInfo)
 {
 	auto hPlugin = std::make_unique<HTTPclass>();
-	return hPlugin.release();
+	PanelHandle = hPlugin.release();
+	return PanelHandle;
 }
