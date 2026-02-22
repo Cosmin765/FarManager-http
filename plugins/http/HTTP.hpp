@@ -48,6 +48,7 @@ public:
 	int ProcessKey(const INPUT_RECORD* Rec);
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
 	intptr_t ProcessSynchroEventW(SynchroEvent* event);
+	intptr_t ProcessEditorEventW(const ProcessEditorEventInfo* Info);
 
 	// send blocking event to synchro
 	void SendSynchroEvent(const SynchroEvent& event);

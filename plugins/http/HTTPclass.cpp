@@ -68,22 +68,22 @@ bool HTTPclass::EnsureTemplatesPath()
 	{
 		// initialise the path
 		// TODO: internationalise
-		wchar_t buffer[MAX_PATH] = L"C:\\FarManager-HTTP";
+		wchar_t templatesPath[MAX_PATH] = L"C:\\FarManager-HTTP";
 		const wchar_t* boxTitle = L"Templates Path";
 		const wchar_t* boxSubTitle = L"Where will HTTP templates be stored?";
 
 		for (;;)
 		{
-			PsInfo.InputBox(&MainGuid, &InputBoxGuid, boxTitle, boxSubTitle, boxTitle, buffer, buffer, MAX_PATH, {}, FIB_BUTTONS);
+			PsInfo.InputBox(&MainGuid, &InputBoxGuid, boxTitle, boxSubTitle, boxTitle, templatesPath, templatesPath, MAX_PATH, {}, FIB_BUTTONS);
 
 			std::error_code ec;
-			if (std::filesystem::exists(buffer, ec) && !ec)
+			if (std::filesystem::exists(templatesPath, ec) && !ec)
 				break;
 
-			if (std::filesystem::create_directories(buffer, ec) && !ec)
+			if (std::filesystem::create_directories(templatesPath, ec) && !ec)
 				break;
 
-			intptr_t btn = BasicErrorMessage({ L"Error", L"Could not create templates directory", buffer, L"\x01", L"&Retry", L"&Ok"}, 2);
+			intptr_t btn = BasicErrorMessage({ L"Error", L"Could not create templates directory", templatesPath, L"\x01", L"&Retry", L"&Ok"}, 2);
 			if (btn == 0)  // retry
 				continue;
 			else
@@ -92,8 +92,37 @@ bool HTTPclass::EnsureTemplatesPath()
 				return false;
 			}
 		}
-		settings.Set(0, L"TemplatesPath", buffer);
+
+		settings.Set(0, L"TemplatesPath", templatesPath);
 	}
+
+	string downloadsPath = settings.Get(0, L"DownloadsPath", L"");
+
+	if (downloadsPath.size() == 0)
+	{
+		downloadsPath = concat(templatesPath, TEXT("\\Downloads"));
+		for (;;)
+		{
+			std::error_code ec;
+			if (std::filesystem::exists(downloadsPath, ec) && !ec)
+				break;
+
+			if (std::filesystem::create_directories(downloadsPath, ec) && !ec)
+				break;
+
+			intptr_t btn = BasicErrorMessage({ L"Error", L"Could not create downloads directory", downloadsPath.c_str(), L"\x01", L"&Retry", L"&Ok" }, 2);
+			if (btn == 0)  // retry
+				continue;
+			else
+			{
+				PsInfo.PanelControl(this, FCTL_CLOSEPANEL, 0, nullptr);
+				return false;
+			}
+		}
+
+		settings.Set(0, L"DownloadsPath", downloadsPath.c_str());
+	}
+
 	checked = true;
 	return true;
 }
@@ -281,9 +310,6 @@ ContentType HTTPclass::GetHTTPContentType()
 	else
 		return ContentType::Other;
 }
-
-
-// TODO: display the keybar for the editor
 
 
 static size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
@@ -485,6 +511,32 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 	}
 
 	return FALSE;
+}
+
+
+intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
+{
+	switch (Info->Event)
+	{
+	case EE_READ:
+		{
+			KeyBarLabel kbl[1];
+			kbl[0] = {
+				.Key = {
+					.VirtualKeyCode = VK_F5,
+					.ControlKeyState = 0,
+			},
+			.Text = TEXT("Headers"),
+			.LongText = TEXT("Headers"),
+			};
+			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
+			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+			PsInfo.EditorControl(Info->EditorID, ECTL_SETKEYBAR, {}, &barTitles);
+		}
+		break;
+	}
+
+	return 0;
 }
 
 
@@ -798,6 +850,23 @@ void HTTPclass::SendSynchroEvent(std::unique_ptr<SynchroEvent> event)
 
 bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 {
+	{
+		FarPanelDirectory fpd{};
+		fpd.StructSize = sizeof(FarPanelDirectory);
+		fpd.PluginId = MainGuid;
+		string downloadsPath;
+		{
+			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
+			downloadsPath = settings.Get(0, L"DownloadsPath", nullptr);
+		}
+		if (downloadsPath.size() > 0)
+		{
+			// TODO: check how it should be done in order to set the current directory for saving the files with shift + F2
+			//std::filesystem::current_path(downloadsPath);
+			//PsInfo.PanelControl(PANEL_ACTIVE, FCTL_SETPANELDIRECTORY, 0, &fpd);
+		}
+	}
+
 	ResetEvent(dldCancel);
 	SCOPE_EXIT{ ResetEvent(dldInProgress); };
 
@@ -950,6 +1019,8 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 	SynchroFunctionEvent openEvent([&](void*)
 		{
 			// open response buffer in viewer/editor
+
+			// TODO: add nonmodal option
 			if (edit)
 				PsInfo.Editor(tempFile, tempFile, 0, 0, -1, -1, EF_NONE, 1, 1, CP_DEFAULT);
 			else

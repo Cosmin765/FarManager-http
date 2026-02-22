@@ -11,3 +11,4 @@ EXPORTS
   PutFilesW
   ProcessSynchroEventW
   ProcessEditorInputW
+  ProcessEditorEventW

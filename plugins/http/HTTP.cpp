@@ -60,9 +60,14 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 }
 
 
-intptr_t WINAPI ProcessEditorInputW(const struct ProcessEditorInputInfo* Info)
+intptr_t WINAPI ProcessEditorInputW(const ProcessEditorInputInfo* Info)
 {
 	return static_cast<HTTPclass*>(PanelHandle)->ProcessEditorKey(&Info->Rec);
+}
+
+intptr_t WINAPI ProcessEditorEventW(const ProcessEditorEventInfo* Info)
+{
+	return static_cast<HTTPclass*>(PanelHandle)->ProcessEditorEventW(Info);
 }
 
 
