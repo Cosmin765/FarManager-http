@@ -12,3 +12,4 @@ EXPORTS
   ProcessSynchroEventW
   ProcessEditorInputW
   ProcessEditorEventW
+  SetDirectoryW

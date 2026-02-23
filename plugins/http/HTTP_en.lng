@@ -11,6 +11,7 @@
 
 "GET"
 "POST"
+"HEAD"
 
 "&Query"
 "&Path"
@@ -29,7 +30,8 @@
 "&Cancel"
 
 "&Ask everytime"
-"Re&member"
+"&Remember"
+"&Clipboard"
 
 "Cancel download?"
 
@@ -37,3 +39,4 @@
 "&No"
 
 "Response Headers"
+"Info"

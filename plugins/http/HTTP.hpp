@@ -46,6 +46,7 @@ public:
 	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode);
 	bool PutFiles(std::span<const PluginPanelItem> Files, const wchar_t* SrcPath, OPERATION_MODES OpMode);
 	int ProcessKey(const INPUT_RECORD* Rec);
+	void DisplayInfo();
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
 	intptr_t ProcessSynchroEventW(SynchroEvent* event);
 	intptr_t ProcessEditorEventW(const ProcessEditorEventInfo* Info);

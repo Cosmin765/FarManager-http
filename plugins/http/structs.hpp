@@ -13,30 +13,31 @@
 using string = std::wstring;
 using string_view = std::wstring_view;
 
-enum struct ContentType: uint8_t
+enum struct ContentType : uint8_t
 {
 	JSON,
 	HTML,
 	Other,
 };
 
-enum struct HTTPArgumentType: uint8_t
+enum struct HTTPArgumentType : uint8_t
 {
 	Query,
 	Path,
 };
 
-enum struct HTTPArgumentRetention: uint8_t
+enum struct HTTPArgumentRetention : uint8_t
 {
 	AskEverytime,
 	Remember,
-	Clipboard,  // TODO: assess this, make it work only if AskEverytime is not present
+	Clipboard,
 };
 
-enum struct HTTPVerb: uint8_t
+enum struct HTTPVerb : uint8_t
 {
 	GET,
 	POST,
+	HEAD,
 };
 
 template <typename T>

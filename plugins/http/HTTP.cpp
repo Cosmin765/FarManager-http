@@ -71,6 +71,12 @@ intptr_t WINAPI ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 }
 
 
+intptr_t WINAPI SetDirectoryW(const SetDirectoryInfo* Info)
+{
+	return TRUE;
+}
+
+
 //intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
 //{
 //	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);

@@ -19,5 +19,9 @@
 
 #include "curl/curl.h"
 
+#include "nlohmann_json.hpp"
+
+#define MAX_CLIPBOARD_SIZE 64 * (1 << 10)
+
 using string = std::wstring;
 using string_view = std::wstring_view;

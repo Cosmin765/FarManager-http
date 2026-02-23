@@ -14,7 +14,7 @@ intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 	this->AddSeparator();
 
 	this->AddText(TEXT("&Verb"));
-	int verbMessageIds[] = { MVerbGET, MVerbPOST };
+	int verbMessageIds[] = { MVerbGET, MVerbPOST, MVerbHEAD };
 	int selectedVerb = (int)data.httpTemplate.verb;
 	this->AddRadioButtons(&selectedVerb, std::size(verbMessageIds), verbMessageIds);
 
@@ -34,6 +34,7 @@ intptr_t HTTPTemplateDialog::ShowDialogEx(HTTPTemplateDialogData& data)
 	std::unordered_map<HTTPArgumentRetention, const wchar_t*> retentionToStr = {
 		{ HTTPArgumentRetention::AskEverytime, TEXT("AskEverytime") },
 		{ HTTPArgumentRetention::Remember, TEXT("Remember") },
+		{ HTTPArgumentRetention::Clipboard, TEXT("Clipboard") },
 	};
 
 	for (const auto& arg : data.httpTemplate.arguments)
@@ -112,7 +113,7 @@ intptr_t HTTPArgumentDialog::ShowDialogEx(
 
 	this->AddText(TEXT("Retention"));
 	int retention = (int)argument.retention;
-	int retentions[] = { MRetentionAsk, MRetentionRemember };
+	int retentions[] = { MRetentionAsk, MRetentionRemember, MRetentionClipboard };
 	this->AddRadioButtons(&retention, std::size(retentions), retentions);
 
 	this->AddOKCancel(MOk, MCancel);

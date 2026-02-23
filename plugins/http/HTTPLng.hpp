@@ -10,6 +10,7 @@
 
   MVerbGET,
   MVerbPOST,
+  MVerbHEAD,
 
   MArgQuery,
   MArgPath,
@@ -29,6 +30,7 @@
 
   MRetentionAsk,
   MRetentionRemember,
+  MRetentionClipboard,
 
   MCancelDownload,
 
@@ -36,4 +38,5 @@
   MNo,
 
   MResponseHeaders,
+  MInfo,
 };
