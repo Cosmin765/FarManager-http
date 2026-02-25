@@ -346,6 +346,22 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 }
 
 
+template<typename InputType>
+static bool isValidJSON(InputType&& i)
+{
+	try
+	{
+		auto j = nlohmann::json::parse(i);
+		return true;
+	}
+	catch (const nlohmann::json::parse_error& e)
+	{
+		// parsing failed, invalid JSON
+		return false;
+	}
+}
+
+
 CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHandle, const char* postdata)
 {
 	std::string url = httpTemplate.GetFullUrl(curl);
@@ -669,7 +685,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 					if (Builder.ShowDialog())
 					{
-						arg.value = newValue;
+						arg.value = trim(string(newValue));
 					}
 					else
 					{
@@ -703,7 +719,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 					SCOPE_EXIT{ GlobalUnlock(hData); };
 
 					// TODO: do something with Content-Disposition -> attachment; filename=Far.x64.3.0.6644.4772.1a4340d7d218edd01cd5bd09b2cfe011711e0125.msi
-					arg.value = clipboardText;
+					arg.value = trim(string(clipboardText));
 				}
 			}
 
@@ -722,7 +738,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			hDldThread = CreateThread({}, {}, [](void* data) -> DWORD
 				{
 					HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
-					const auto& currentDld = panel->currentDld;
+					auto& currentDld = panel->currentDld;
 					panel->OpenURL(currentDld.httpTemplate, currentDld.edit);
 					return 0;
 				}, this, {}, {});
@@ -840,7 +856,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			else if (result == removeSelectedHeaderId)
 			{
 				if (listSelectedHeader >= 0 && listSelectedHeader < (int)requestHeaders.size())
-					arguments.erase(arguments.begin() + listSelectedHeader);
+					requestHeaders.erase(requestHeaders.begin() + listSelectedHeader);
 			}
 			else if (result == removeAllHeadersId)
 			{
@@ -955,7 +971,7 @@ void HTTPclass::SendSynchroEvent(std::unique_ptr<SynchroEvent> event)
 }
 
 
-bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
+bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 {
 	{
 		FarPanelDirectory fpd{};
@@ -1095,6 +1111,15 @@ bool HTTPclass::OpenURL(const HTTPTemplate& httpTemplate, bool edit)
 			return false;  // cancelled
 
 		std::string postdata = WideCharToMultiByte(widePostdata);
+
+		if (isValidJSON(postdata))
+		{
+			auto& headers = httpTemplate.requestHeaders;
+			Header header = { TEXT("content-type"), TEXT("application/json") };
+			if (std::find(headers.begin(), headers.end(), header) == headers.end())
+				httpTemplate.requestHeaders.push_back(header);
+		}
+
 		curlCode = HttpDownload(httpTemplate, fileHandle, postdata.c_str());
 	}
 	else

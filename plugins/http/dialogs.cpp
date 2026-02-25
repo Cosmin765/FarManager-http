@@ -136,7 +136,7 @@ intptr_t HTTPRequestHeaderDialog::ShowDialogEx(
 	auto& [headerName, headerValue] = requestHeader;
 	this->AddText(TEXT("&Name"));
 	this->AddEditField(headerName, 100, TEXT("HTTP_Header_Name"), true);
-
+	
 	this->AddSeparator();
 
 	this->AddText(TEXT("&Value"));
@@ -144,5 +144,12 @@ intptr_t HTTPRequestHeaderDialog::ShowDialogEx(
 
 	this->AddOKCancel(MOk, MCancel);
 
-	return PluginDialogBuilder::ShowDialogEx();
+	auto res = PluginDialogBuilder::ShowDialogEx();
+
+	std::transform(headerName.begin(), headerName.end(), headerName.begin(),
+		[](unsigned char c) { return std::tolower(c); });
+	std::transform(headerValue.begin(), headerValue.end(), headerValue.begin(),
+		[](unsigned char c) { return std::tolower(c); });
+
+	return res;
 }
