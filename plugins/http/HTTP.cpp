@@ -1,6 +1,6 @@
 ﻿#include "HTTP.hpp"
 
-HANDLE PanelHandle;
+HANDLE PanelHandle = INVALID_HANDLE_VALUE;
 
 void WINAPI GetGlobalInfoW(struct GlobalInfo *GInfo)
 {
@@ -21,7 +21,7 @@ void WINAPI SetStartupInfoW(const struct PluginStartupInfo *psi)
 void WINAPI GetPluginInfoW(struct PluginInfo *PInfo)
 {
 	PInfo->StructSize=sizeof(*PInfo);
-	PInfo->Flags=PF_EDITOR;
+	PInfo->Flags=PF_NONE;
 	static const wchar_t *PluginMenuStrings[1];
 	PluginMenuStrings[0]=GetMsg(MTitle);
 	PInfo->PluginMenu.Guids=&MenuGuid;
@@ -51,8 +51,10 @@ intptr_t WINAPI PutFilesW(const PutFilesInfo* Info)
 
 intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 {
+	if (PanelHandle == INVALID_HANDLE_VALUE)
+		return FALSE;
 	if (Info->Event != SE_COMMONSYNCHRO)
-		return 0;
+		return FALSE;
 
 	SynchroEvent* event = static_cast<SynchroEvent*>(Info->Param);
 	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
@@ -62,11 +64,15 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 
 intptr_t WINAPI ProcessEditorInputW(const ProcessEditorInputInfo* Info)
 {
+	if (PanelHandle == INVALID_HANDLE_VALUE)
+		return FALSE;
 	return static_cast<HTTPclass*>(PanelHandle)->ProcessEditorKey(&Info->Rec);
 }
 
 intptr_t WINAPI ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 {
+	if (PanelHandle == INVALID_HANDLE_VALUE)
+		return FALSE;
 	return static_cast<HTTPclass*>(PanelHandle)->ProcessEditorEventW(Info);
 }
 

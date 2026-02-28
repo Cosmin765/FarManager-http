@@ -33,6 +33,19 @@ void HTTPclass::GetOpenPanelInfo(OpenPanelInfo* Info)
 		VK_F3, 0, MOpenView,
 		VK_F4, 0, MOpenEdit,
 		VK_F5, 0, MInfo,
+		VK_F2, SHIFT_PRESSED, MGET,
+
+		VK_F1, 0, NULL,
+		VK_F1, SHIFT_PRESSED, NULL,
+		VK_F3, SHIFT_PRESSED, NULL,
+		VK_F5, SHIFT_PRESSED, NULL,
+		VK_F6, SHIFT_PRESSED, NULL,
+		VK_F8, SHIFT_PRESSED, NULL,
+		VK_F5, LEFT_ALT_PRESSED, NULL,
+		VK_F6, LEFT_ALT_PRESSED, NULL,
+		VK_F6, 0, NULL,
+		VK_F7, 0, NULL,
+		VK_F8, 0, NULL,
 	};
 
 	static KeyBarLabel kbl[std::size(FKeys) / 3];
@@ -524,8 +537,6 @@ void HTTPclass::DisplayInfo()
 	buffer += "\n--------------\n\n";
 
 	// TODO: cancelling is funky when the domain is not accessible/other http error
-	// TODO: add cookie information
-	// TODO: add certificate information
 
 	for (const auto& [name, value] : GetAllHeaders())
 	{
@@ -554,6 +565,11 @@ void HTTPclass::DisplayInfo()
 
 int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 {
+	if (editorId == -1)
+	{
+		// not our editor
+		return FALSE;
+	}
 	if (Rec->EventType != KEY_EVENT)
 		return FALSE;
 
@@ -579,27 +595,17 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 
 intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 {
+	if (Info->EditorID != editorId)
+		return FALSE;
+
 	switch (Info->Event)
 	{
-	case EE_READ:
-		{
-			KeyBarLabel kbl[1];
-			kbl[0] = {
-				.Key = {
-					.VirtualKeyCode = VK_F5,
-					.ControlKeyState = 0,
-			},
-			.Text = GetMsg(MInfo),
-			.LongText = GetMsg(MInfo),
-			};
-			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
-			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
-			PsInfo.EditorControl(Info->EditorID, ECTL_SETKEYBAR, {}, &barTitles);
-		}
+	case EE_CLOSE:
+		editorId = -1;
 		break;
 	}
 
-	return 0;
+	return FALSE;
 }
 
 
@@ -645,6 +651,50 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 	if (dlding)
 		return TRUE;  // don't handle any other event
+
+	auto startDownload = [this](const HTTPTemplate& httpTemplate, bool edit, bool headOnly)
+		{
+			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
+
+			if (hDldThread != NULL)
+			{
+				WaitForSingleObject(hDldThread, INFINITE);  // just in case
+				CloseHandle(hDldThread);
+			}
+			SetEvent(dldInProgress);
+
+			if (headOnly)
+				currentDld.httpTemplate.verb = HTTPVerb::HEAD;
+
+			hDldThread = CreateThread({}, {}, [](void* data) -> DWORD
+				{
+					HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
+					auto& currentDld = panel->currentDld;
+					panel->OpenURL(currentDld.httpTemplate, currentDld.edit);
+					return 0;
+				}, this, {}, {});
+
+			if (hDldThread == NULL)
+				BasicErrorMessage({ L"Error", L"Error creating download thread", LastWinAPIError().get(), L"\x01", L"&Ok" });
+		};
+
+	if (OnlyAnyShiftPressed && Key == VK_F2)
+	{
+		HTTPTemplate httpTemplate;
+		httpTemplate.verb = HTTPVerb::GET;
+		PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MEphemeralGET, TEXT("Ephemeral_GET"));
+		Builder.AddText(TEXT("&URL"));
+		Builder.AddEditField(httpTemplate.url, 100, TEXT("Ephemeral_GET"), false);
+		Builder.AddSeparator();
+		Builder.AddText(TEXT("Mode"));
+		int edit = 1;
+		int messageIds[] = { MView, MEdit };
+		Builder.AddRadioButtons(&edit, std::size(messageIds), messageIds);
+		Builder.AddOKCancel(MOk, MCancel);
+		if (Builder.ShowDialog() && httpTemplate.url.size() > 0)
+			startDownload(httpTemplate, static_cast<bool>(edit), false);
+		return TRUE;
+	}
 
 	if (NonePressed && (Key == VK_F3 || Key == VK_F4 || Key == VK_F5))
 	{
@@ -723,28 +773,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				}
 			}
 
-			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
-
-			if (hDldThread != NULL)
-			{
-				WaitForSingleObject(hDldThread, INFINITE);  // just in case
-				CloseHandle(hDldThread);
-			}
-			SetEvent(dldInProgress);
-
-			if (headOnly)
-				currentDld.httpTemplate.verb = HTTPVerb::HEAD;
-
-			hDldThread = CreateThread({}, {}, [](void* data) -> DWORD
-				{
-					HTTPclass* panel = reinterpret_cast<HTTPclass*>(data);
-					auto& currentDld = panel->currentDld;
-					panel->OpenURL(currentDld.httpTemplate, currentDld.edit);
-					return 0;
-				}, this, {}, {});
-
-			if (hDldThread == NULL)
-				BasicErrorMessage({ L"Error", L"Error creating download thread", LastWinAPIError().get(), L"\x01", L"&Ok" });
+			startDownload(httpTemplate, edit, headOnly);
 		}
 
 		return TRUE;
@@ -1062,34 +1091,6 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 	SCOPE_EXIT{
 		if (fileHandle != INVALID_HANDLE_VALUE)
 			CloseHandle(fileHandle);  // release it in case it wasn't
-
-		bool retryDelete = true;
-		while (retryDelete)
-		{
-			if (!DeleteFileW(tempFile))
-			{
-				DWORD errorCode = GetLastError();
-				if (errorCode == ERROR_FILE_NOT_FOUND)
-					break;
-				intptr_t choice = BasicErrorMessage({ L"Error", L"Could not delete temp file", tempFile, LastWinAPIError().get(), L"\x01", L"&Retry", L"&Ignore" }, 2);
-				switch (choice)
-				{
-				case 0: // retry
-					break;
-				case -1: // escape key
-				case 1: // ignore
-					retryDelete = false;
-					break;
-				default:
-					std::unreachable();
-					break;
-				}
-			}
-			else
-			{
-				retryDelete = false;
-			}
-		}
 	};
 
 	CURLcode curlCode;
@@ -1170,12 +1171,71 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 	SynchroFunctionEvent openEvent([&](void*)
 		{
 			// open response buffer in viewer/editor
+			
+			//if (edit)
+			//{
+			//	PsInfo.Editor(tempFile, wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_IMMEDIATERETURN | EF_DELETEONCLOSE | EF_ENABLE_F6, 1, 1, CP_DEFAULT);
+			//	EditorInfo eInfo = { .StructSize = sizeof(EditorInfo) };
+			//	PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, 0, &eInfo);
+			//	editorId = eInfo.EditorID;
 
-			// TODO: add nonmodal option
-			if (edit)
-				PsInfo.Editor(tempFile, tempFile, 0, 0, -1, -1, EF_NONE, 1, 1, CP_DEFAULT);
-			else
-				PsInfo.Viewer(tempFile, tempFile, 0, 0, -1, -1, VF_NONE, CP_DEFAULT);
+			//	KeyBarLabel kbl[1];
+			//	kbl[0] = {
+			//		.Key = {
+			//			.VirtualKeyCode = VK_F5,
+			//			.ControlKeyState = 0,
+			//	},
+			//	.Text = GetMsg(MInfo),
+			//	.LongText = GetMsg(MInfo),
+			//	};
+			//	KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
+			//	FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+			//	PsInfo.EditorControl(eInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
+
+			//	// workaround to redraw the editor
+			//	std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
+			//		{
+			//			INPUT_RECORD rec{};
+			//			rec.EventType = KEY_EVENT;
+			//			rec.Event.KeyEvent.bKeyDown = true;
+			//			rec.Event.KeyEvent.wVirtualKeyCode = VK_LEFT;
+			//			PsInfo.EditorControl(eInfo.EditorID, ECTL_PROCESSINPUT, {}, & rec);
+			//		});
+			//	SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
+			//}
+			//else
+			//	PsInfo.Viewer(tempFile, wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE | VF_ENABLE_F6, CP_DEFAULT);
+
+			// workaround for a bug when switching from viewer to editor using F6 (it didn't redraw)
+			// TODO: fix this once a better way is found, this is not ideal for gigantic files because they get parsed in the editor when we simply want to view the response
+			PsInfo.Editor(tempFile, wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_IMMEDIATERETURN | EF_DELETEONCLOSE | EF_ENABLE_F6, 1, 1, CP_DEFAULT);
+			EditorInfo eInfo = { .StructSize = sizeof(EditorInfo) };
+			PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, 0, &eInfo);
+			editorId = eInfo.EditorID;
+
+			KeyBarLabel kbl[1];
+			kbl[0] = {
+				.Key = {
+					.VirtualKeyCode = VK_F5,
+					.ControlKeyState = 0,
+			},
+			.Text = GetMsg(MInfo),
+			.LongText = GetMsg(MInfo),
+			};
+			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
+			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+			PsInfo.EditorControl(eInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
+
+			// workaround to redraw the editor
+			std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
+				{
+					INPUT_RECORD rec{};
+					rec.EventType = KEY_EVENT;
+					rec.Event.KeyEvent.bKeyDown = true;
+					rec.Event.KeyEvent.wVirtualKeyCode = edit ? VK_LEFT : VK_F6;  // if view, switch to viewer
+					PsInfo.EditorControl(eInfo.EditorID, ECTL_PROCESSINPUT, {}, &rec);
+				});
+			SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
 		});
 	SendSynchroEvent(openEvent);
 

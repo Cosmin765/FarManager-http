@@ -39,4 +39,8 @@
 
   MResponseHeaders,
   MInfo,
+  MGET,
+  MEphemeralGET,
+  MView,
+  MEdit,
 };

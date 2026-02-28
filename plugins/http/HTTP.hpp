@@ -93,6 +93,7 @@ private:
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE dldInProgress = CreateEvent({}, TRUE, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
+	intptr_t editorId = -1;
 
 	static constexpr wchar_t extension[] = L".htmpl";
 };
