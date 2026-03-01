@@ -93,7 +93,9 @@ private:
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE dldInProgress = CreateEvent({}, TRUE, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
-	intptr_t editorId = -1;
+	std::unordered_set<intptr_t> editorIds;
+	intptr_t currentlyOpenEditorId = -1;
+	std::unordered_map<intptr_t, std::string> editorInfoBuffers;
 
 	static constexpr wchar_t extension[] = L".htmpl";
 };

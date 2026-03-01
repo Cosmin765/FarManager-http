@@ -515,35 +515,11 @@ void HTTPclass::DisplayInfo()
 		return;
 	}
 
-	std::string buffer;
-	long httpCode = 0;
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-	buffer += std::format("Status code: {}\n", httpCode);
-
-	buffer += "\n--------------\n\n";
-
-	char* destinationIp;
-	curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &destinationIp);
-	buffer += std::format("Destination IP: {}\n", destinationIp);
-
-	long port;
-	curl_easy_getinfo(curl, CURLINFO_PRIMARY_PORT, &port);
-	buffer += std::format("Destination port: {}\n", port);
-
-	char* effectiveUrl;
-	curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
-	buffer += std::format("Effective URL: {}\n", effectiveUrl);
-
-	buffer += "\n--------------\n\n";
-
 	// TODO: cancelling is funky when the domain is not accessible/other http error
 
-	for (const auto& [name, value] : GetAllHeaders())
 	{
-		buffer += name + ": " + value + "\n";
-	}
+		const std::string& buffer = editorInfoBuffers[currentlyOpenEditorId];
 
-	{
 		HANDLE hFile = CreateFile(headersFilepath, GENERIC_WRITE, FILE_SHARE_READ, {}, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, {});
 		if (hFile == INVALID_HANDLE_VALUE)
 		{
@@ -565,7 +541,7 @@ void HTTPclass::DisplayInfo()
 
 int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 {
-	if (editorId == -1)
+	if (editorIds.find(currentlyOpenEditorId) == editorIds.end())
 	{
 		// not our editor
 		return FALSE;
@@ -593,16 +569,103 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 }
 
 
+static bool IsHTTPEditor(intptr_t editorId)
+{
+	intptr_t requiredSize = PsInfo.EditorControl(editorId, ECTL_GETTITLE, 0, NULL);
+	string title;
+	title.resize(requiredSize);
+	PsInfo.EditorControl(editorId, ECTL_GETTITLE, requiredSize, title.data());
+	string prefixes[] = { L"http://", L"https://" };
+	for (const string& prefix : prefixes)
+	{
+		size_t sizeToCheck = std::min(title.size(), prefix.size());
+		if (wcsncmp(title.c_str(), prefix.c_str(), sizeToCheck) == 0)
+			return true;
+	}
+	return false;
+}
+
+
 intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 {
-	if (Info->EditorID != editorId)
-		return FALSE;
-
 	switch (Info->Event)
 	{
+	case EE_GOTFOCUS:
+		{
+			currentlyOpenEditorId = Info->EditorID;
+
+			if (editorIds.find(Info->EditorID) == editorIds.end() && !IsHTTPEditor(Info->EditorID))
+				break;
+
+			KeyBarLabel kbl[1];
+			kbl[0] = {
+				.Key = {
+					.VirtualKeyCode = VK_F5,
+					.ControlKeyState = 0,
+			},
+			.Text = GetMsg(MInfo),
+			.LongText = GetMsg(MInfo),
+			};
+			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
+			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+			PsInfo.EditorControl(Info->EditorID, ECTL_SETKEYBAR, {}, &barTitles);
+
+			std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([=](void*)
+			{
+				INPUT_RECORD rec{};
+				rec.EventType = KEY_EVENT;
+				rec.Event.KeyEvent.bKeyDown = true;
+				rec.Event.KeyEvent.wVirtualKeyCode = VK_LEFT;
+				PsInfo.EditorControl(currentlyOpenEditorId, ECTL_PROCESSINPUT, {}, &rec);
+			});
+			SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
+		} break;
+	case EE_READ:
+		{
+			if (IsHTTPEditor(Info->EditorID))
+			{
+				editorIds.insert(Info->EditorID);
+
+				std::string buffer;
+				long httpCode = 0;
+				curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+				buffer += std::format("Status code: {}\n", httpCode);
+
+				buffer += "\n--------------\n\n";
+
+				char* destinationIp;
+				curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &destinationIp);
+				buffer += std::format("Destination IP: {}\n", destinationIp);
+
+				long port;
+				curl_easy_getinfo(curl, CURLINFO_PRIMARY_PORT, &port);
+				buffer += std::format("Destination port: {}\n", port);
+
+				char* effectiveUrl;
+				curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
+				buffer += std::format("Effective URL: {}\n", effectiveUrl);
+
+				buffer += "\n--------------\n\n";
+
+				for (const auto& [name, value] : GetAllHeaders())
+				{
+					buffer += name + ": " + value + "\n";
+				}
+
+				editorInfoBuffers[Info->EditorID] = buffer;
+			}
+		} break;
 	case EE_CLOSE:
-		editorId = -1;
-		break;
+		{
+			if (editorIds.find(Info->EditorID) == editorIds.end())
+				break;
+			editorIds.erase(Info->EditorID);
+			editorInfoBuffers.erase(Info->EditorID);
+		} break;
+	case EE_KILLFOCUS:
+		{
+			currentlyOpenEditorId = -1;
+		} break;
 	}
 
 	return FALSE;
@@ -1172,70 +1235,10 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 		{
 			// open response buffer in viewer/editor
 			
-			//if (edit)
-			//{
-			//	PsInfo.Editor(tempFile, wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_IMMEDIATERETURN | EF_DELETEONCLOSE | EF_ENABLE_F6, 1, 1, CP_DEFAULT);
-			//	EditorInfo eInfo = { .StructSize = sizeof(EditorInfo) };
-			//	PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, 0, &eInfo);
-			//	editorId = eInfo.EditorID;
-
-			//	KeyBarLabel kbl[1];
-			//	kbl[0] = {
-			//		.Key = {
-			//			.VirtualKeyCode = VK_F5,
-			//			.ControlKeyState = 0,
-			//	},
-			//	.Text = GetMsg(MInfo),
-			//	.LongText = GetMsg(MInfo),
-			//	};
-			//	KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
-			//	FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
-			//	PsInfo.EditorControl(eInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
-
-			//	// workaround to redraw the editor
-			//	std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
-			//		{
-			//			INPUT_RECORD rec{};
-			//			rec.EventType = KEY_EVENT;
-			//			rec.Event.KeyEvent.bKeyDown = true;
-			//			rec.Event.KeyEvent.wVirtualKeyCode = VK_LEFT;
-			//			PsInfo.EditorControl(eInfo.EditorID, ECTL_PROCESSINPUT, {}, & rec);
-			//		});
-			//	SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
-			//}
-			//else
-			//	PsInfo.Viewer(tempFile, wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE | VF_ENABLE_F6, CP_DEFAULT);
-
-			// workaround for a bug when switching from viewer to editor using F6 (it didn't redraw)
-			// TODO: fix this once a better way is found, this is not ideal for gigantic files because they get parsed in the editor when we simply want to view the response
-			PsInfo.Editor(tempFile, wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_IMMEDIATERETURN | EF_DELETEONCLOSE | EF_ENABLE_F6, 1, 1, CP_DEFAULT);
-			EditorInfo eInfo = { .StructSize = sizeof(EditorInfo) };
-			PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, 0, &eInfo);
-			editorId = eInfo.EditorID;
-
-			KeyBarLabel kbl[1];
-			kbl[0] = {
-				.Key = {
-					.VirtualKeyCode = VK_F5,
-					.ControlKeyState = 0,
-			},
-			.Text = GetMsg(MInfo),
-			.LongText = GetMsg(MInfo),
-			};
-			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
-			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
-			PsInfo.EditorControl(eInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
-
-			// workaround to redraw the editor
-			std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
-				{
-					INPUT_RECORD rec{};
-					rec.EventType = KEY_EVENT;
-					rec.Event.KeyEvent.bKeyDown = true;
-					rec.Event.KeyEvent.wVirtualKeyCode = edit ? VK_LEFT : VK_F6;  // if view, switch to viewer
-					PsInfo.EditorControl(eInfo.EditorID, ECTL_PROCESSINPUT, {}, &rec);
-				});
-			SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
+			if (edit)
+				PsInfo.Editor(tempFile, wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_DELETEONCLOSE | EF_ENABLE_F6, 1, 1, CP_DEFAULT);
+			else
+				PsInfo.Viewer(tempFile, wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE | VF_ENABLE_F6, CP_DEFAULT);
 		});
 	SendSynchroEvent(openEvent);
 
