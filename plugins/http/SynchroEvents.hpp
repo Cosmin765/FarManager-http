@@ -21,7 +21,7 @@ struct SynchroDataEvent : SynchroEvent
 {
 	T arg{};
 
-	SynchroDataEvent(SynchroEventType _type): SynchroEvent(_type) {};
+	SynchroDataEvent(SynchroEventType _type, T _arg = {}): SynchroEvent(_type), arg(_arg) {};
 };
 
 struct SynchroFunctionEvent : SynchroDataEvent<void*>

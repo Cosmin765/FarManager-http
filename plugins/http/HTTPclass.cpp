@@ -427,7 +427,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 
 			return 0;
 		}, this, {}, {});
-	
+
 	CURLcode result = curl_easy_perform(curl);
 	SetEvent(dldDone);
 
@@ -437,8 +437,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 		CloseHandle(progressShowThread);
 	}
 
-	ContentType contentType = GetHTTPContentType();
-	if (contentType == ContentType::JSON)
+	if (result == CURLE_OK && GetHTTPContentType() == ContentType::JSON)
 	{
 		// prettify, maybe refactor later
 		SetFilePointer(fileHandle, 0, 0, FILE_BEGIN);
@@ -514,8 +513,6 @@ void HTTPclass::DisplayInfo()
 		BasicErrorMessage({ L"Error", L"Could not reserve name for headers file", LastWinAPIError().get(), L"\x01", L"&Ok" });
 		return;
 	}
-
-	// TODO: cancelling is funky when the domain is not accessible/other http error
 
 	{
 		const std::string& buffer = editorInfoBuffers[currentlyOpenEditorId];
@@ -674,14 +671,14 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 
 int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 {
+	if (Rec->EventType != KEY_EVENT)
+		return FALSE;
+
 	bool dlding = WaitForSingleObject(dldInProgress, 0) == WAIT_OBJECT_0;
 
 	// TODO: this doesn't work, mouse still propagates through
 	if (Rec->EventType == MOUSE_EVENT)
 		return dlding; // don't handle if dlding
-
-	if (Rec->EventType != KEY_EVENT)
-		return FALSE;
 
 	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
 	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
@@ -694,6 +691,10 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 	if (Key == VK_ESCAPE)
 	{
 		if (!dlding)
+			return FALSE;
+
+		bool cancelled = WaitForSingleObject(dldCancel, 0) == WAIT_OBJECT_0;
+		if (cancelled)
 			return FALSE;
 
 		std::unique_ptr<SynchroEvent> cancelDialogEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
@@ -717,14 +718,15 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 	auto startDownload = [this](const HTTPTemplate& httpTemplate, bool edit, bool headOnly)
 		{
-			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
-
 			if (hDldThread != NULL)
 			{
-				WaitForSingleObject(hDldThread, INFINITE);  // just in case
+				// just in case
+				WaitForSingleObject(hDldThread, INFINITE);
 				CloseHandle(hDldThread);
 			}
 			SetEvent(dldInProgress);
+
+			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
 
 			if (headOnly)
 				currentDld.httpTemplate.verb = HTTPVerb::HEAD;
@@ -1047,11 +1049,13 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 void HTTPclass::SendSynchroEvent(const SynchroEvent& event)
 {
 	WaitForSingleObject(synchroMutex, INFINITE);
-	ResetEvent(synchroEventFree);
+	if (!event.heap)
+		ResetEvent(synchroEventFree);
 
 	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, const_cast<SynchroEvent*>(&event));
 
-	WaitForSingleObject(synchroEventFree, INFINITE);
+	if (!event.heap)
+		WaitForSingleObject(synchroEventFree, INFINITE);
 	ReleaseMutex(synchroMutex);
 }
 
@@ -1089,8 +1093,6 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 			Dir->StructSize = sizeof(*Dir);
 			PsInfo.PanelControl(PANEL_ACTIVE, FCTL_GETPANELDIRECTORY, Size, Dir);
 			string ListPath = Dir->Name;
-
-			int a = 69;
 		}
 	}
 
@@ -1198,8 +1200,11 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 			// intentional cancel
 			return false;
 		}
-		string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
-		BasicErrorMessage({ L"HTTP error", wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok"});
+		if (WaitForSingleObject(dldCancel, 0) != WAIT_OBJECT_0)
+		{
+			string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
+			BasicErrorMessage({ L"HTTP error", wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok"});
+		}
 		return false;
 	}
 
