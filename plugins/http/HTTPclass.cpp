@@ -496,7 +496,7 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 }
 
 
-void HTTPclass::DisplayInfo()
+void HTTPclass::DisplayInfo(const std::string& buffer)
 {
 	if (WaitForSingleObject(showingHeaders, 0) == WAIT_OBJECT_0)
 	{
@@ -515,8 +515,6 @@ void HTTPclass::DisplayInfo()
 	}
 
 	{
-		const std::string& buffer = editorInfoBuffers[currentlyOpenEditorId];
-
 		HANDLE hFile = CreateFile(headersFilepath, GENERIC_WRITE, FILE_SHARE_READ, {}, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, {});
 		if (hFile == INVALID_HANDLE_VALUE)
 		{
@@ -557,8 +555,7 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 	if (NonePressed && Key == VK_F5)
 	{
 		// show response headers
-		DisplayInfo();
-
+		DisplayInfo(editorInfoBuffers[currentlyOpenEditorId]);
 		return TRUE;
 	}
 
@@ -580,6 +577,36 @@ static bool IsHTTPEditor(intptr_t editorId)
 			return true;
 	}
 	return false;
+}
+
+std::string HTTPclass::GetInfoBuffer()
+{
+	std::string buffer;
+	long httpCode = 0;
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+	buffer += std::format("Status code: {}\n", httpCode);
+
+	buffer += "\n--------------\n\n";
+
+	char* destinationIp;
+	curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &destinationIp);
+	buffer += std::format("Destination IP: {}\n", destinationIp);
+
+	long port;
+	curl_easy_getinfo(curl, CURLINFO_PRIMARY_PORT, &port);
+	buffer += std::format("Destination port: {}\n", port);
+
+	char* effectiveUrl;
+	curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
+	buffer += std::format("Effective URL: {}\n", effectiveUrl);
+
+	buffer += "\n--------------\n\n";
+
+	for (const auto& [name, value] : GetAllHeaders())
+	{
+		buffer += name + ": " + value + "\n";
+	}
+	return buffer;
 }
 
 
@@ -622,34 +649,7 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 			if (IsHTTPEditor(Info->EditorID))
 			{
 				editorIds.insert(Info->EditorID);
-
-				std::string buffer;
-				long httpCode = 0;
-				curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-				buffer += std::format("Status code: {}\n", httpCode);
-
-				buffer += "\n--------------\n\n";
-
-				char* destinationIp;
-				curl_easy_getinfo(curl, CURLINFO_PRIMARY_IP, &destinationIp);
-				buffer += std::format("Destination IP: {}\n", destinationIp);
-
-				long port;
-				curl_easy_getinfo(curl, CURLINFO_PRIMARY_PORT, &port);
-				buffer += std::format("Destination port: {}\n", port);
-
-				char* effectiveUrl;
-				curl_easy_getinfo(curl, CURLINFO_EFFECTIVE_URL, &effectiveUrl);
-				buffer += std::format("Effective URL: {}\n", effectiveUrl);
-
-				buffer += "\n--------------\n\n";
-
-				for (const auto& [name, value] : GetAllHeaders())
-				{
-					buffer += name + ": " + value + "\n";
-				}
-
-				editorInfoBuffers[Info->EditorID] = buffer;
+				editorInfoBuffers[Info->EditorID] = GetInfoBuffer();
 			}
 		} break;
 	case EE_CLOSE:
@@ -694,7 +694,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			return FALSE;
 
 		bool cancelled = WaitForSingleObject(dldCancel, 0) == WAIT_OBJECT_0;
-		if (cancelled)
+		bool done = WaitForSingleObject(dldDone, 0) == WAIT_OBJECT_0;
+		if (cancelled || done)
 			return FALSE;
 
 		std::unique_ptr<SynchroEvent> cancelDialogEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
@@ -1132,8 +1133,11 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 
 	if (httpTemplate.verb == HTTPVerb::HEAD)
 	{
-		ObtainHttpHeaders(httpTemplate);
-		DisplayInfo();
+		SendSynchroEvent(SynchroFunctionEvent([=](void*)
+			{
+				ObtainHttpHeaders(httpTemplate);
+				DisplayInfo(GetInfoBuffer());
+			})); // execute sync
 		return true;
 	}
 
