@@ -448,9 +448,9 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 		if (ReadFile(fileHandle, responseBody.data(), responseBody.capacity(), &read, NULL) && read == responseBody.size())
 		{
 			try {
-				responseBody = nlohmann::json::parse(responseBody).dump(4);
+				responseBody = nlohmann::ordered_json::parse(responseBody).dump(4);
 			}
-			catch (const nlohmann::json::parse_error& e) {}
+			catch (const nlohmann::ordered_json::parse_error& e) {}
 			SetFilePointer(fileHandle, 0, 0, FILE_BEGIN);
 			DWORD written;
 			if (WriteFile(fileHandle, responseBody.c_str(), responseBody.size(), &written, NULL) && written == responseBody.size())
