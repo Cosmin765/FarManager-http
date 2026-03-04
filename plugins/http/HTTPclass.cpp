@@ -381,6 +381,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 	curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
 	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlProgressCallback);
 
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
@@ -446,7 +447,10 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 		DWORD read;
 		if (ReadFile(fileHandle, responseBody.data(), responseBody.capacity(), &read, NULL) && read == responseBody.size())
 		{
-			responseBody = nlohmann::json::parse(responseBody).dump(4);
+			try {
+				responseBody = nlohmann::json::parse(responseBody).dump(4);
+			}
+			catch (const nlohmann::json::parse_error& e) {}
 			SetFilePointer(fileHandle, 0, 0, FILE_BEGIN);
 			DWORD written;
 			if (WriteFile(fileHandle, responseBody.c_str(), responseBody.size(), &written, NULL) && written == responseBody.size())
@@ -922,10 +926,15 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			}
 			else if (result == editSelectedArgId)
 			{
-				HTTPArgument argument = arguments[listSelectedArg];
-				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
-					if (ValidArgument(argument, listSelectedArg))
-						arguments[listSelectedArg] = argument;
+				if (listSelectedArg == -1)
+					BasicErrorMessage({ L"Error", L"No argument was selected", L"\x01", L"&Ok" });
+				else if (listSelectedArg >= 0 && listSelectedArg < (int)arguments.size())
+				{
+					HTTPArgument argument = arguments[listSelectedArg];
+					if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
+						if (ValidArgument(argument, listSelectedArg))
+							arguments[listSelectedArg] = argument;
+				}
 			}
 			else if (result == removeSelectedArgId)
 			{
@@ -944,9 +953,14 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			}
 			else if (result == editSelectedHeaderId)
 			{
-				Header requestHeader = requestHeaders[listSelectedHeader];
-				if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
-					requestHeaders[listSelectedHeader] = requestHeader;
+				if (listSelectedHeader == -1)
+					BasicErrorMessage({ L"Error", L"No header was selected", L"\x01", L"&Ok" });
+				else if (listSelectedHeader >= 0 && listSelectedHeader < (int)requestHeaders.size())
+				{
+					Header requestHeader = requestHeaders[listSelectedHeader];
+					if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
+						requestHeaders[listSelectedHeader] = requestHeader;
+				}
 			}
 			else if (result == removeSelectedHeaderId)
 			{
