@@ -56,9 +56,9 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 	if (Info->Event != SE_COMMONSYNCHRO)
 		return FALSE;
 
-	SynchroEvent* event = static_cast<SynchroEvent*>(Info->Param);
+	SynchroAction* action = static_cast<SynchroAction*>(Info->Param);
 	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
-	return panel->ProcessSynchroEventW(event);
+	return panel->ProcessSynchroEventW(action);
 }
 
 

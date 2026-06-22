@@ -3,7 +3,7 @@
 #include "version.hpp"
 #include "HTTPLng.hpp"
 #include "structs.hpp"
-#include "SynchroEvents.hpp"
+#include "SynchroActions.hpp"
 #include "local_util.hpp"
 #include "dialogs.hpp"
 
@@ -49,13 +49,13 @@ public:
 	std::string GetInfoBuffer();
 	void DisplayInfo(const std::string& buffer);
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
-	intptr_t ProcessSynchroEventW(SynchroEvent* event);
+	intptr_t ProcessSynchroEventW(SynchroAction* event);
 	intptr_t ProcessEditorEventW(const ProcessEditorEventInfo* Info);
 
 	// send blocking event to synchro
-	void SendSynchroEvent(const SynchroEvent& event);
+	void SendSynchroAction(const SynchroAction& event);
 	// send async event to synchro
-	void SendSynchroEvent(std::unique_ptr<SynchroEvent> event);
+	void SendSynchroAction(std::unique_ptr<SynchroAction> event);
 
 private:
 	// Internals
@@ -82,17 +82,17 @@ private:
 
 public:
 	DldThreadData currentDld;
-	HANDLE dldCancel = CreateEvent({}, TRUE, FALSE, {});
-	HANDLE dldRun = CreateEvent({}, TRUE, TRUE, {});
-	HANDLE dldDone = CreateEvent({}, FALSE, TRUE, {});
+	std::atomic<bool> dldShouldCancel = false;
+	std::atomic<bool> curlEasyPerformInProgress = false;
+	std::atomic<bool> dldInProgress = false;
+	HANDLE dldShouldRun = CreateEvent({}, TRUE, TRUE, {});
 
 private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
 	HANDLE hDldThread = NULL;
-	HANDLE synchroEventFree = CreateEvent({}, TRUE, TRUE, {});
+	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
-	HANDLE dldInProgress = CreateEvent({}, TRUE, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
 	std::unordered_set<intptr_t> editorIds;
 	intptr_t currentlyOpenEditorId = -1;

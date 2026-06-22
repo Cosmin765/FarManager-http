@@ -348,12 +348,12 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 
 	HTTPclass* panel = reinterpret_cast<HTTPclass*>(clientp);
 
-	WaitForSingleObject(panel->dldRun, INFINITE);
+	WaitForSingleObject(panel->dldShouldRun, INFINITE);
 
 	panel->currentDld.dlnow = dlnow;
 	panel->currentDld.dltotal = dltotal;
 
-	if (WaitForSingleObject(panel->dldCancel, 0) == WAIT_OBJECT_0)
+	if (panel->dldShouldCancel)
 		return 1;  // non-zero aborts transfer
 	return 0; // continue
 }
@@ -410,19 +410,17 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	SListPtr headers = httpTemplate.GetHeadersList();
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
-	ResetEvent(dldDone);
+	curlEasyPerformInProgress = true;
 	HANDLE progressShowThread = CreateThread({}, 0, [](void* data) -> DWORD
 		{
 			HTTPclass* panel = static_cast<HTTPclass*>(data);
 
 			for (;;)
 			{
-				WaitForSingleObject(panel->dldRun, INFINITE);
-				bool cancelled = WaitForSingleObject(panel->dldCancel, 0) == WAIT_OBJECT_0;
-				bool done = WaitForSingleObject(panel->dldDone, 0) == WAIT_OBJECT_0;
-				if (cancelled || done)
+				WaitForSingleObject(panel->dldShouldRun, INFINITE);
+				if (panel->dldShouldCancel || !panel->curlEasyPerformInProgress)
 					break;
-				panel->SendSynchroEvent(SynchroEventType::SHOW_PROGRESS);
+				panel->SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
 				Sleep(100);
 			}
 
@@ -430,7 +428,7 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 		}, this, {}, {});
 
 	CURLcode result = curl_easy_perform(curl);
-	SetEvent(dldDone);
+	curlEasyPerformInProgress = false;
 
 	if (progressShowThread != NULL)
 	{
@@ -638,7 +636,7 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
 			PsInfo.EditorControl(Info->EditorID, ECTL_SETKEYBAR, {}, &barTitles);
 
-			std::unique_ptr<SynchroEvent> editorUpdateEvent = std::make_unique<SynchroFunctionEvent>([=](void*)
+			std::unique_ptr<SynchroAction> editorUpdateAction = std::make_unique<SynchroFunctionAction>([=](void*)
 			{
 				INPUT_RECORD rec{};
 				rec.EventType = KEY_EVENT;
@@ -646,7 +644,7 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 				rec.Event.KeyEvent.wVirtualKeyCode = VK_LEFT;
 				PsInfo.EditorControl(currentlyOpenEditorId, ECTL_PROCESSINPUT, {}, &rec);
 			});
-			SendSynchroEvent(std::move(editorUpdateEvent)); // execute async
+			SendSynchroAction(std::move(editorUpdateAction)); // execute async
 		} break;
 	case EE_READ:
 		{
@@ -678,11 +676,9 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 	if (Rec->EventType != KEY_EVENT)
 		return FALSE;
 
-	bool dlding = WaitForSingleObject(dldInProgress, 0) == WAIT_OBJECT_0;
-
 	// TODO: this doesn't work, mouse still propagates through
 	if (Rec->EventType == MOUSE_EVENT)
-		return dlding; // don't handle if dlding
+		return dldInProgress; // don't handle if dlding
 
 	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
 	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
@@ -694,31 +690,29 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 	if (Key == VK_ESCAPE)
 	{
-		if (!dlding)
+		if (!dldInProgress)
 			return FALSE;
 
-		bool cancelled = WaitForSingleObject(dldCancel, 0) == WAIT_OBJECT_0;
-		bool done = WaitForSingleObject(dldDone, 0) == WAIT_OBJECT_0;
-		if (cancelled || done)
+		if (dldShouldCancel || !curlEasyPerformInProgress)
 			return FALSE;
 
-		std::unique_ptr<SynchroEvent> cancelDialogEvent = std::make_unique<SynchroFunctionEvent>([&](void*)
+		std::unique_ptr<SynchroAction> cancelDialogAction = std::make_unique<SynchroFunctionAction>([&](void*)
 			{
-				ResetEvent(dldRun);
+				ResetEvent(dldShouldRun);
 				PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MCancelDownload, TEXT("Download_Cancel"), {}, {}, FDLG_WARNING);
 				Builder.AddOKCancel(MYes, MNo);
 				if (Builder.ShowDialog())
 				{
-					SetEvent(dldCancel);
+					dldShouldCancel = true;
 				}
-				SetEvent(dldRun);  // allow the download thread to run
+				SetEvent(dldShouldRun);  // allow the download thread to continue
 			});
-		SendSynchroEvent(std::move(cancelDialogEvent)); // execute async
+		SendSynchroAction(std::move(cancelDialogAction)); // execute async
 
 		return TRUE;
 	}
 
-	if (dlding)
+	if (dldInProgress)
 		return TRUE;  // don't handle any other event
 
 	auto startDownload = [this](const HTTPTemplate& httpTemplate, bool edit, bool headOnly)
@@ -729,7 +723,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				WaitForSingleObject(hDldThread, INFINITE);
 				CloseHandle(hDldThread);
 			}
-			SetEvent(dldInProgress);
+			dldInProgress = true;
 
 			currentDld = { .httpTemplate = httpTemplate, .edit = edit };
 
@@ -1004,35 +998,35 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 }
 
 
-intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
+intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 {
 	SCOPE_EXIT{
-		if (event->heap)
-			delete event;
+		if (action->heap)
+			delete action;
 		else
-			SetEvent(synchroEventFree);
+			SetEvent(synchroActionExecuted);
 	};
 
-	switch (event->type)
+	switch (action->type)
 	{
-	case SynchroEventType::UPDATE_PANEL:
+	case SynchroActionType::UPDATE_PANEL:
 		{
 			PsInfo.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
 			PsInfo.PanelControl(this, FCTL_REDRAWPANEL, NULL, {});
 		} break;
-	case SynchroEventType::SAVE_SCREEN:
+	case SynchroActionType::SAVE_SCREEN:
 		{
-			SynchroDataEvent<HANDLE>* _event = dynamic_cast<SynchroDataEvent<HANDLE>*>(event);
-			HANDLE& screen = _event->arg;
+			SynchroDataAction<HANDLE>* _action = dynamic_cast<SynchroDataAction<HANDLE>*>(action);
+			HANDLE& screen = _action->arg;
 			screen = PsInfo.SaveScreen(0, 0, -1, -1);
 		} break;
-	case SynchroEventType::RESTORE_SCREEN:
+	case SynchroActionType::RESTORE_SCREEN:
 		{
-			SynchroDataEvent<HANDLE>* _event = dynamic_cast<SynchroDataEvent<HANDLE>*>(event);
-			HANDLE& screen = _event->arg;
+			SynchroDataAction<HANDLE>* _action = dynamic_cast<SynchroDataAction<HANDLE>*>(action);
+			HANDLE& screen = _action->arg;
 			PsInfo.RestoreScreen(screen);
 		} break;
-	case SynchroEventType::SHOW_PROGRESS:
+	case SynchroActionType::SHOW_PROGRESS:
 		{
 			const auto& dlnow = currentDld.dlnow;
 			const auto& dltotal = currentDld.dltotal;
@@ -1049,10 +1043,10 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 				PsInfo.Message(&MainGuid, &ProgressMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
 			}
 		} break;
-	case SynchroEventType::FUNCTION:
+	case SynchroActionType::FUNCTION:
 		{
-			SynchroFunctionEvent* _event = dynamic_cast<SynchroFunctionEvent*>(event);
-			_event->func(_event->arg);
+			SynchroFunctionAction* _action = dynamic_cast<SynchroFunctionAction*>(action);
+			_action->func(_action->arg);
 		} break;
 	default:
 		std::unreachable();
@@ -1061,24 +1055,25 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroEvent* event)
 }
 
 
-void HTTPclass::SendSynchroEvent(const SynchroEvent& event)
+void HTTPclass::SendSynchroAction(const SynchroAction& action)
 {
+	// warning: this can result in deadlock if not carefully used
 	WaitForSingleObject(synchroMutex, INFINITE);
-	if (!event.heap)
-		ResetEvent(synchroEventFree);
+	if (!action.heap)
+		ResetEvent(synchroActionExecuted);
 
-	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, const_cast<SynchroEvent*>(&event));
+	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, const_cast<SynchroAction*>(&action));
 
-	if (!event.heap)
-		WaitForSingleObject(synchroEventFree, INFINITE);
+	if (!action.heap)
+		WaitForSingleObject(synchroActionExecuted, INFINITE);
 	ReleaseMutex(synchroMutex);
 }
 
 
-void HTTPclass::SendSynchroEvent(std::unique_ptr<SynchroEvent> event)
+void HTTPclass::SendSynchroAction(std::unique_ptr<SynchroAction> action)
 {
-	event->heap = true;
-	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, event.release());
+	action->heap = true;
+	PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, action.release());
 }
 
 
@@ -1111,8 +1106,8 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 		}
 	}
 
-	ResetEvent(dldCancel);
-	SCOPE_EXIT{ ResetEvent(dldInProgress); };
+	dldShouldCancel = false;
+	SCOPE_EXIT{ dldInProgress = false; };
 
 	if (!curl)  // not initialised
 	{
@@ -1134,20 +1129,20 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 
 	std::string url = httpTemplate.GetFullUrl(curl);
 
-	SynchroDataEvent<HANDLE> saveScreenEvent(SynchroEventType::SAVE_SCREEN);
-	SendSynchroEvent(saveScreenEvent);
+	SynchroDataAction<HANDLE> saveScreenAction(SynchroActionType::SAVE_SCREEN);
+	SendSynchroAction(saveScreenAction);
 
 	string wideUrl = MultiByteToWideChar(url);
 
 	SCOPE_EXIT{
-		SynchroDataEvent<HANDLE>& restoreScreenEvent = saveScreenEvent;
-		restoreScreenEvent.type = SynchroEventType::RESTORE_SCREEN;
-		SendSynchroEvent(restoreScreenEvent);  // this restores the screen
+		SynchroDataAction<HANDLE>& restoreScreenAction = saveScreenAction;
+		restoreScreenAction.type = SynchroActionType::RESTORE_SCREEN;
+		SendSynchroAction(restoreScreenAction);  // this restores the screen
 	};
 
 	if (httpTemplate.verb == HTTPVerb::HEAD)
 	{
-		SendSynchroEvent(SynchroFunctionEvent([=](void*)
+		SendSynchroAction(SynchroFunctionAction([=](void*)
 			{
 				ObtainHttpHeaders(httpTemplate);
 				DisplayInfo(GetInfoBuffer());
@@ -1182,14 +1177,15 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 		string widePostdata;
 
 		bool dlgResult;
-		SynchroFunctionEvent postdataEvent([&](void*)
+		SynchroFunctionAction postdataAction([&](void*)
 			{
 				PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPPostdata, TEXT("HTTP_Postdata"));
 				Builder.AddEditField(widePostdata, 100, {}, false);
 				Builder.AddOKCancel(MOk, MCancel);
 				dlgResult = Builder.ShowDialog();
 			});
-		SendSynchroEvent(postdataEvent);
+
+		SendSynchroAction(postdataAction);
 
 		if (!dlgResult)
 			return false;  // cancelled
@@ -1218,7 +1214,7 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 			// intentional cancel
 			return false;
 		}
-		if (WaitForSingleObject(dldCancel, 0) != WAIT_OBJECT_0)
+		if (!dldShouldCancel)
 		{
 			string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
 			BasicErrorMessage({ L"HTTP error", wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok"});
@@ -1254,7 +1250,7 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 		}
 	}
 
-	SynchroFunctionEvent openEvent([&](void*)
+	SynchroFunctionAction openAction([&](void*)
 		{
 			// open response buffer in viewer/editor
 			
@@ -1263,7 +1259,7 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 			else
 				PsInfo.Viewer(tempFile, wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE | VF_ENABLE_F6, CP_DEFAULT);
 		});
-	SendSynchroEvent(openEvent);
+	SendSynchroAction(openAction);
 
 	return true;
 }

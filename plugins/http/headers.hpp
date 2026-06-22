@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <assert.h>
 #include <unordered_set>
+#include <atomic>
 
 #include <plugin.hpp>
 #include <initguid.h>
