@@ -278,6 +278,70 @@ bool HTTPclass::PutFiles(const std::span<const PluginPanelItem> Files, const wch
 }
 
 
+CURLcode HTTPclass::MultiCurlPerform()
+{
+	curlEasyPerformInProgress = true;
+	int running_handles;
+	CURLMcode mresult;
+	for (;;)
+	{
+		mresult = curl_multi_perform(curlm, &running_handles);
+		if (mresult != CURLM_OK)  // error
+		{
+			break;
+		}
+
+		if (!running_handles)  // success
+		{
+			break;
+		}
+
+		WaitForSingleObject(dldShouldRun, INFINITE);
+		if (dldShouldCancel)
+		{
+			break;
+		}
+		else
+		{
+			SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
+		}
+
+		// poll
+		mresult = curl_multi_poll(curlm, NULL, 0, 1000, NULL);
+		if (mresult != CURLM_OK)  // error
+		{
+			break;
+		}
+	}
+
+	curlEasyPerformInProgress = false;
+
+	CURLMsg* msg;
+	CURLcode result = CURLE_OK;
+	do
+	{
+		int msgq = 0;
+		msg = curl_multi_info_read(curlm, &msgq);
+		if (msg && (msg->msg == CURLMSG_DONE))
+		{
+			if (msg->easy_handle == curl)
+			{
+				result = msg->data.result;
+			}
+			curl_multi_remove_handle(curlm, curl);
+		}
+	} while (msg);
+
+	WaitForSingleObject(dldShouldRun, INFINITE);
+	if (dldShouldCancel)
+	{
+		result = CURLE_ABORTED_BY_CALLBACK;
+	}
+
+	return result;
+}
+
+
 CURLcode HTTPclass::ObtainHttpHeaders(const HTTPTemplate& httpTemplate)
 {
 	std::string url = httpTemplate.GetFullUrl(curl);
@@ -291,8 +355,11 @@ CURLcode HTTPclass::ObtainHttpHeaders(const HTTPTemplate& httpTemplate)
 	SListPtr headers = httpTemplate.GetHeadersList();
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
-	CURLcode result = curl_easy_perform(curl);
+	string wideUrl = MultiByteToWideChar(url);
+	currentDld.url = wideUrl.c_str();
+	SCOPE_EXIT{ currentDld.url = nullptr; };
 
+	CURLcode result = MultiCurlPerform();
 	return result;
 }
 
@@ -409,61 +476,9 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	SListPtr headers = httpTemplate.GetHeadersList();
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
-	curlEasyPerformInProgress = true;
+	CURLcode result = MultiCurlPerform();
 
-	int running_handles;
-	CURLMcode mresult;
-	for (;;)
-	{
-		mresult = curl_multi_perform(curlm, &running_handles);
-		if (mresult != CURLM_OK)  // error
-		{
-			break;
-		}
-
-		if (!running_handles)  // success
-		{
-			break;
-		}
-
-		WaitForSingleObject(dldShouldRun, INFINITE);
-		if (!dldShouldCancel)
-		{
-			SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
-		}
-		else
-		{
-			break;
-		}
-
-		// poll
-		mresult = curl_multi_poll(curlm, NULL, 0, 1000, NULL);
-		if (mresult != CURLM_OK)  // error
-		{
-			break;
-		}
-	}
-
-	CURLMsg* msg;
-	CURLcode result = CURLE_ABORTED_BY_CALLBACK;  // on cancel, the handle is removed from the multi interface
-	do
-	{
-		int msgq = 0;
-		msg = curl_multi_info_read(curlm, &msgq);
-		if (msg && (msg->msg == CURLMSG_DONE))
-		{
-			if (msg->easy_handle == curl)
-			{
-				result = msg->data.result;
-			}
-			curl_multi_remove_handle(curlm, curl);
-		}
-	}
-	while (msg);
-
-	curlEasyPerformInProgress = false;
-
-	if (mresult == CURLM_OK && result == CURLE_OK && GetHTTPContentType() == ContentType::JSON)
+	if (result == CURLE_OK && GetHTTPContentType() == ContentType::JSON)
 	{
 		// prettify, maybe refactor later
 		SetFilePointer(fileHandle, 0, 0, FILE_BEGIN);
@@ -1189,11 +1204,14 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 
 	if (httpTemplate.verb == HTTPVerb::HEAD)
 	{
-		SendSynchroAction(SynchroFunctionAction([=](void*)
-			{
-				ObtainHttpHeaders(httpTemplate);
-				DisplayInfo(GetInfoBuffer());
-			})); // execute sync
+		CURLcode result = ObtainHttpHeaders(httpTemplate);
+		if (result != CURLE_ABORTED_BY_CALLBACK)
+		{
+			SendSynchroAction(SynchroFunctionAction([=](void*)
+				{
+					DisplayInfo(GetInfoBuffer());
+				})); // execute sync
+		}
 		return true;
 	}
 

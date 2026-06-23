@@ -78,6 +78,7 @@ private:
 	ContentType GetHTTPContentType();
 	// performs a GET request and saves the body to a specified file
 	CURLcode HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHandle, const char* postdata);
+	CURLcode MultiCurlPerform();
 	bool OpenURL(HTTPTemplate& httpTemplate, bool edit = false);
 
 public:
