@@ -15,6 +15,7 @@ HTTPclass::~HTTPclass() {
 	{
 		// curl cleanup
 		curl_easy_cleanup(curl);
+		curl_multi_cleanup(curlm);
 		curl_global_cleanup();
 	}
 }
@@ -348,8 +349,6 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 
 	HTTPclass* panel = reinterpret_cast<HTTPclass*>(clientp);
 
-	WaitForSingleObject(panel->dldShouldRun, INFINITE);
-
 	panel->currentDld.dlnow = dlnow;
 	panel->currentDld.dltotal = dltotal;
 
@@ -411,32 +410,60 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.get());
 
 	curlEasyPerformInProgress = true;
-	HANDLE progressShowThread = CreateThread({}, 0, [](void* data) -> DWORD
-		{
-			HTTPclass* panel = static_cast<HTTPclass*>(data);
 
-			for (;;)
-			{
-				WaitForSingleObject(panel->dldShouldRun, INFINITE);
-				if (panel->dldShouldCancel || !panel->curlEasyPerformInProgress)
-					break;
-				panel->SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
-				Sleep(100);
-			}
-
-			return 0;
-		}, this, {}, {});
-
-	CURLcode result = curl_easy_perform(curl);
-	curlEasyPerformInProgress = false;
-
-	if (progressShowThread != NULL)
+	int running_handles;
+	CURLMcode mresult;
+	for (;;)
 	{
-		WaitForSingleObject(progressShowThread, INFINITE);
-		CloseHandle(progressShowThread);
+		mresult = curl_multi_perform(curlm, &running_handles);
+		if (mresult != CURLM_OK)  // error
+		{
+			break;
+		}
+
+		if (!running_handles)  // success
+		{
+			break;
+		}
+
+		WaitForSingleObject(dldShouldRun, INFINITE);
+		if (!dldShouldCancel)
+		{
+			SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
+		}
+		else
+		{
+			break;
+		}
+
+		// poll
+		mresult = curl_multi_poll(curlm, NULL, 0, 1000, NULL);
+		if (mresult != CURLM_OK)  // error
+		{
+			break;
+		}
 	}
 
-	if (result == CURLE_OK && GetHTTPContentType() == ContentType::JSON)
+	CURLMsg* msg;
+	CURLcode result = CURLE_ABORTED_BY_CALLBACK;  // on cancel, the handle is removed from the multi interface
+	do
+	{
+		int msgq = 0;
+		msg = curl_multi_info_read(curlm, &msgq);
+		if (msg && (msg->msg == CURLMSG_DONE))
+		{
+			if (msg->easy_handle == curl)
+			{
+				result = msg->data.result;
+			}
+			curl_multi_remove_handle(curlm, curl);
+		}
+	}
+	while (msg);
+
+	curlEasyPerformInProgress = false;
+
+	if (mresult == CURLM_OK && result == CURLE_OK && GetHTTPContentType() == ContentType::JSON)
 	{
 		// prettify, maybe refactor later
 		SetFilePointer(fileHandle, 0, 0, FILE_BEGIN);
@@ -704,6 +731,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				if (Builder.ShowDialog())
 				{
 					dldShouldCancel = true;
+					curl_multi_remove_handle(curlm, curl);
+					curl_multi_wakeup(curlm);
 				}
 				SetEvent(dldShouldRun);  // allow the download thread to continue
 			});
@@ -1109,7 +1138,7 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 	dldShouldCancel = false;
 	SCOPE_EXIT{ dldInProgress = false; };
 
-	if (!curl)  // not initialised
+	if (!curlm)  // not initialised
 	{
 		CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
 		if (result != CURLE_OK)
@@ -1118,13 +1147,31 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 			return false;
 		}
 
+		curlm = curl_multi_init();
+		if (!curlm)
+		{
+			curl_global_cleanup();
+			BasicErrorMessage({ L"Error", L"CURL multi init failed", L"\x01", L"&Ok" });
+			return false;
+		}
+
+	}
+
+	if (!curl)
+	{
 		curl = curl_easy_init();
 		if (!curl)  // failure
 		{
-			curl_global_cleanup();
 			BasicErrorMessage({ L"Error", L"CURL easy init failed", L"\x01", L"&Ok" });
 			return false;
 		}
+	}
+
+	CURLMcode mcode = curl_multi_add_handle(curlm, curl);
+	if (mcode != CURLM_OK)
+	{
+		string errorMessage = MultiByteToWideChar(curl_multi_strerror(mcode));
+		BasicErrorMessage({ L"CURL multi error", errorMessage.c_str(), L"\x01", L"&Ok" });
 	}
 
 	std::string url = httpTemplate.GetFullUrl(curl);
@@ -1209,12 +1256,7 @@ bool HTTPclass::OpenURL(HTTPTemplate& httpTemplate, bool edit)
 
 	if (curlCode != CURLE_OK)
 	{
-		if (curlCode == CURLE_ABORTED_BY_CALLBACK)
-		{
-			// intentional cancel
-			return false;
-		}
-		if (!dldShouldCancel)
+		if (curlCode != CURLE_ABORTED_BY_CALLBACK && !dldShouldCancel)
 		{
 			string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
 			BasicErrorMessage({ L"HTTP error", wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok"});

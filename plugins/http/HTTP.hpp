@@ -90,6 +90,7 @@ public:
 private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
+	CURLM* curlm = nullptr;
 	HANDLE hDldThread = NULL;
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
