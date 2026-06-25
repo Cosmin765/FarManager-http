@@ -4,6 +4,7 @@
 #include <string_view>
 #include <span>
 #include <vector>
+#include <deque>
 #include <utility>
 #include <format>
 #include <filesystem>

@@ -127,6 +127,7 @@ struct HTTPTemplate
 	string url;
 	std::vector<HTTPArgument> arguments;
 	std::vector<Header> requestHeaders;
+	string Filename;  // not serialized
 
 	void Serialize(std::vector<uint8_t>& buffer) const
 	{

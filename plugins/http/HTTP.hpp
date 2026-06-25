@@ -78,6 +78,7 @@ private:
 	ContentType GetHTTPContentType();
 	// performs a GET request and saves the body to a specified file
 	CURLcode HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHandle, const char* postdata);
+	// performs a request through the curl multi interface
 	CURLcode MultiCurlPerform();
 	bool OpenURL(HTTPTemplate& httpTemplate, bool edit = false);
 
@@ -92,7 +93,7 @@ private:
 	PluginPanel pp;
 	CURL* curl = nullptr;
 	CURLM* curlm = nullptr;
-	HANDLE hDldThread = NULL;
+	std::atomic<HANDLE> hDldThread = NULL;
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
@@ -100,5 +101,6 @@ private:
 	intptr_t currentlyOpenEditorId = -1;
 	std::unordered_map<intptr_t, std::string> editorInfoBuffers;
 
-	static constexpr wchar_t extension[] = L".htmpl";
+	static constexpr wchar_t EXTENSION[] = L".htmpl";
+	static constexpr size_t EXTENSION_LENGTH = std::size(EXTENSION) - 1;
 };

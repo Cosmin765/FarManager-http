@@ -1,47 +1,72 @@
 ﻿#include "headers.hpp"
 
-struct HTTPTemplateDialogData
+namespace HTTPDialogs
 {
-	IN OUT HTTPTemplate httpTemplate;
-	IN OUT string filename;
-	IN OUT int listSelectedArg = 0;
-	IN OUT int listSelectedHeader = 0;
+	constexpr intptr_t OK_ID = 0;
+	constexpr intptr_t CANCEL_ID = -1;
 
-	OUT int addArgId;
-	OUT int editSelectedArgId;
-	OUT int removeSelectedArgId;
-	OUT int removeAllArgsId;
+	struct TemplateDialogData
+	{
+		IN OUT HTTPTemplate httpTemplate;
+		IN OUT string filename;
+		IN OUT int listSelectedArg = 0;
+		IN OUT int listSelectedHeader = 0;
 
-	OUT int addHeaderId;
-	OUT int editSelectedHeaderId;
-	OUT int removeSelectedHeaderId;
-	OUT int removeAllHeadersId;
-};
+		OUT int addArgId;
+		OUT int editSelectedArgId;
+		OUT int removeSelectedArgId;
+		OUT int removeAllArgsId;
 
-class HTTPTemplateDialog : public PluginDialogBuilder
-{
-public:
-	HTTPTemplateDialog();
+		OUT int addHeaderId;
+		OUT int editSelectedHeaderId;
+		OUT int removeSelectedHeaderId;
+		OUT int removeAllHeadersId;
+	};
 
-	intptr_t ShowDialogEx(HTTPTemplateDialogData& data);
-};
+	struct OpenSelectionDialogData
+	{
+		string selectedText;
+		std::vector<string> httpTemplateFilenames;
+		std::deque<bool> selectedIndices;
+	};
 
-class HTTPArgumentDialog : public PluginDialogBuilder
-{
-public:
-	HTTPArgumentDialog();
+	class Template : public PluginDialogBuilder
+	{
+	public:
+		Template();
 
-	intptr_t ShowDialogEx(
-		IN OUT HTTPArgument& argument
-	);
-};
+		intptr_t ShowDialogEx(
+			IN OUT TemplateDialogData& data
+		);
+	};
 
-class HTTPRequestHeaderDialog: public PluginDialogBuilder
-{
-public:
-	HTTPRequestHeaderDialog();
+	class Argument : public PluginDialogBuilder
+	{
+	public:
+		Argument();
 
-	intptr_t ShowDialogEx(
-		IN OUT Header& requestHeader
-	);
-};
+		intptr_t ShowDialogEx(
+			IN OUT HTTPArgument& argument
+		);
+	};
+
+	class RequestHeader : public PluginDialogBuilder
+	{
+	public:
+		RequestHeader();
+
+		intptr_t ShowDialogEx(
+			IN OUT Header& requestHeader
+		);
+	};
+
+	class OpenSelection : public PluginDialogBuilder
+	{
+	public:
+		OpenSelection();
+
+		intptr_t ShowDialogEx(
+			IN OUT OpenSelectionDialogData& data
+		);
+	};
+;}

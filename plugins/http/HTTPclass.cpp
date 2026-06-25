@@ -11,10 +11,13 @@ HTTPclass::HTTPclass() {
 }
 
 HTTPclass::~HTTPclass() {
+	// curl cleanup
+
 	if (curl)
-	{
-		// curl cleanup
 		curl_easy_cleanup(curl);
+
+	if (curlm)
+	{
 		curl_multi_cleanup(curlm);
 		curl_global_cleanup();
 	}
@@ -146,10 +149,9 @@ bool HTTPclass::EnsureTemplatesPath()
 bool HTTPclass::IsValidTemplateExtension(const wchar_t* templateName)
 {
 	size_t nameLen = wcsnlen_s(templateName, MAX_PATH);
-	size_t extLen = std::size(extension) - 1; // exclude null
-	if (nameLen < extLen)
+	if (nameLen < EXTENSION_LENGTH)
 		return false;
-	if (_wcsicmp(templateName + nameLen - extLen, extension) != 0)
+	if (_wcsicmp(templateName + nameLen - EXTENSION_LENGTH, EXTENSION) != 0)
 		return false;
 	return true;
 }
@@ -187,15 +189,7 @@ bool HTTPclass::LoadTemplateItems()
 	{
 		if (!IsValidTemplate(i))
 			continue;
-		string FileName = i.FileName;
-		if (pp.AddedItems.find(FileName) != pp.AddedItems.end())
-			continue;  // already added
-		pp.AddedItems.insert(FileName);
-		auto& newItem = pp.Items.emplace_back(i);
-		newItem.FileName = pp.StringData.emplace_back(newItem.FileName).c_str();
-		newItem.Owner = pp.OwnerData.emplace_back(NullToEmpty(newItem.Owner)).c_str();
-		newItem.AlternateFileName = {};  // access violation thrown if this is not set
-		//NewItem.UserData.Data = reinterpret_cast<void*>(m_Panel->Items.size() - 1);
+		PutOneFile(templatesPath, i);
 	}
 
 	PsInfo.FreeDirList(ppi, count);
@@ -244,7 +238,9 @@ bool HTTPclass::PutOneFile(const string& SrcPath, const PluginPanelItem& PanelIt
 {
 	string FileName = PanelItem.FileName;
 	if (!SrcPath.empty() && !contains(PanelItem.FileName, L'\\'))
-		FileName = concat(SrcPath, SrcPath.back() == L'\\'? L"" : L"\\", FileName);
+		FileName = concat(SrcPath, SrcPath.back() == L'\\' ? L"" : L"\\", FileName);
+
+	FileName = FileName.substr(0, FileName.size() - EXTENSION_LENGTH);
 
 	if (pp.AddedItems.find(FileName) != pp.AddedItems.end())
 		return false;  // already added
@@ -254,9 +250,8 @@ bool HTTPclass::PutOneFile(const string& SrcPath, const PluginPanelItem& PanelIt
 	string& NewName = pp.StringData.emplace_back(FileName);
 
 	NewItem.FileName = NewName.c_str();
-	NewItem.AlternateFileName = {};
+	NewItem.AlternateFileName = {};  // access violation thrown if this is not set
 	NewItem.Owner = pp.OwnerData.emplace_back(NullToEmpty(NewItem.Owner)).c_str();
-	//NewItem.UserData.Data = reinterpret_cast<void*>(pp.Items.size() - 1);
 
 	return true;
 }
@@ -287,31 +282,21 @@ CURLcode HTTPclass::MultiCurlPerform()
 	{
 		mresult = curl_multi_perform(curlm, &running_handles);
 		if (mresult != CURLM_OK)  // error
-		{
 			break;
-		}
 
 		if (!running_handles)  // success
-		{
 			break;
-		}
 
 		WaitForSingleObject(dldShouldRun, INFINITE);
 		if (dldShouldCancel)
-		{
 			break;
-		}
 		else
-		{
 			SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
-		}
 
 		// poll
 		mresult = curl_multi_poll(curlm, NULL, 0, 1000, NULL);
 		if (mresult != CURLM_OK)  // error
-		{
 			break;
-		}
 	}
 
 	curlEasyPerformInProgress = false;
@@ -334,9 +319,7 @@ CURLcode HTTPclass::MultiCurlPerform()
 
 	WaitForSingleObject(dldShouldRun, INFINITE);
 	if (dldShouldCancel)
-	{
 		result = CURLE_ABORTED_BY_CALLBACK;
-	}
 
 	return result;
 }
@@ -504,10 +487,14 @@ CURLcode HTTPclass::HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHa
 
 bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplate& httpTemplate, bool verbose)
 {
-	HANDLE templateFile = CreateFile(filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	string Filename = filename;
+	if (!IsValidTemplateExtension(Filename.c_str()))
+		Filename = concat(Filename, EXTENSION);
+
+	HANDLE templateFile = CreateFile(Filename.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (templateFile == INVALID_HANDLE_VALUE)
 	{
-		BasicErrorMessage({ L"Error", L"Error opening template file", filename, LastWinAPIError().get(), L"\x01", L"&Ok"});
+		BasicErrorMessage({ L"Error", L"Error opening template file", Filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
 		return false;
 	}
 	SCOPE_EXIT{ CloseHandle(templateFile); };
@@ -517,7 +504,7 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 	if (!ReadFile(templateFile, templateBuffer.data(), bufferSize, &bytesRead, NULL))
 	{
 		if (verbose)
-			BasicErrorMessage({ L"Error", L"Error reading from template file", filename, LastWinAPIError().get(), L"\x01", L"&Ok"});
+			BasicErrorMessage({ L"Error", L"Error reading from template file", Filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
 		return false;
 	}
 
@@ -532,10 +519,11 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 		if (verbose)
 		{
 			string errWide = MultiByteToWideChar(e.what());
-			BasicErrorMessage({ L"Error", L"Error deserializing from template file", filename, errWide.c_str(), L"\x01", L"&Ok"});
+			BasicErrorMessage({ L"Error", L"Error deserializing from template file", Filename.c_str(), errWide.c_str(), L"\x01", L"&Ok"});
 		}
 		return false;
 	}
+	httpTemplate.Filename = Filename;
 	return true;
 }
 
@@ -603,6 +591,107 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 		return TRUE;
 	}
 
+	if (OnlyAnyShiftPressed && Key == VK_F3)
+	{
+		// TODO: shift + F3 to expand the selection inside quotes?
+	}
+
+	if (OnlyAnyShiftPressed && Key == VK_F4)
+	{
+		HTTPDialogs::OpenSelectionDialogData osdd;
+
+		// retrieve the selected text in order to forward it as the clipboard argument
+		EditorInfo editorInfo = { sizeof(EditorInfo) };
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETINFO, NULL, &editorInfo);
+		auto CurLine = editorInfo.CurLine;
+		auto TotalLines = editorInfo.TotalLines;
+
+		std::unordered_map<std::intptr_t, int> lineNumbers = { { CurLine, 0 } };
+
+		EditorGetString egs = { sizeof(EditorGetString) };
+
+		while (lineNumbers.size() > 0)
+		{
+			// SelStart = -1 means that there is no selection
+			// SelEnd = -1 means that the selection exceeds current line
+
+			auto [StringNumber, direction] = *lineNumbers.begin();
+			egs.StringNumber = StringNumber;
+			lineNumbers.erase(lineNumbers.begin());
+
+			PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETSTRING, NULL, &egs);
+
+			if (egs.SelStart == -1 || !egs.StringText)
+				continue;
+
+			// extract line selection
+			string StringText = egs.StringText;
+			string LineSelection;
+			if (egs.SelEnd != -1)
+				LineSelection = StringText.substr(egs.SelStart, egs.SelEnd - egs.SelStart);
+			else
+				LineSelection = StringText.substr(egs.SelStart) + egs.StringEOL;
+
+			// figure out where to add the line content
+			if (direction == -1)
+				osdd.selectedText = LineSelection + osdd.selectedText;
+			else if (direction == 1 || direction == 0)
+				osdd.selectedText = osdd.selectedText + LineSelection;
+
+			// traverse adjacent lines if needed
+			if ((direction == -1 || direction == 0) && StringNumber > 0)
+				lineNumbers.insert({StringNumber - 1, -1});
+			if ((direction == 1 || direction == 0) && StringNumber < TotalLines - 1)
+				lineNumbers.insert({ StringNumber + 1, 1 });
+		}
+
+		std::vector<HTTPTemplate> httpTemplates;
+
+		for (const auto& item : pp.Items)
+		{
+			HTTPTemplate httpTemplate;
+			if (!DeserializeTemplateFromFile(item.FileName, httpTemplate))
+				continue;
+
+			// check if it accepts a Clipboard argument
+
+			bool hasClipboardArg = false;
+			for (const auto& arg : httpTemplate.arguments)
+			{
+				if (arg.retention == HTTPArgumentRetention::Clipboard)
+				{
+					hasClipboardArg = true;
+					break;
+				}
+			}
+
+			if (!hasClipboardArg)
+				continue;
+
+			httpTemplates.push_back(httpTemplate);
+			osdd.httpTemplateFilenames.push_back(item.FileName);
+
+			bool defaultSelected = currentDld.httpTemplate.Filename == httpTemplate.Filename;
+			osdd.selectedIndices.push_back(defaultSelected);
+		}
+
+		if (HTTPDialogs::OpenSelection().ShowDialogEx(osdd) == HTTPDialogs::OK_ID)
+		{
+			for (const auto& [selected, httpTemplate] : std::views::zip(osdd.selectedIndices, httpTemplates))
+			{
+				if (!selected)
+					continue;
+
+				std::unique_ptr<SynchroAction> openUrlAction = std::make_unique<SynchroFunctionAction>([=](void*)
+					{
+						auto httpTemplateCopy = httpTemplate;
+						OpenURL(httpTemplateCopy, true);
+					});
+				SendSynchroAction(std::move(openUrlAction)); // execute async
+			}
+		}
+	}
+
 	return FALSE;
 }
 
@@ -665,7 +754,7 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 			if (editorIds.find(Info->EditorID) == editorIds.end() && !IsHTTPEditor(Info->EditorID))
 				break;
 
-			KeyBarLabel kbl[1];
+			KeyBarLabel kbl[2];
 			kbl[0] = {
 				.Key = {
 					.VirtualKeyCode = VK_F5,
@@ -673,6 +762,14 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 			},
 			.Text = GetMsg(MInfo),
 			.LongText = GetMsg(MInfo),
+			};
+			kbl[1] = {
+				.Key = {
+					.VirtualKeyCode = VK_F4,
+					.ControlKeyState = SHIFT_PRESSED,
+			},
+			.Text = GetMsg(MRequest),
+			.LongText = GetMsg(MRequest),
 			};
 			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
 			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
@@ -894,10 +991,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		// create the template file
 
 		intptr_t result = -1;
-		int okId = 0;
-		int cancelId = 1;
 
-		HTTPTemplateDialogData templateDlgData{};
+		HTTPDialogs::TemplateDialogData templateDlgData{};
 		HTTPTemplate& httpTemplate = templateDlgData.httpTemplate;
 		std::vector<HTTPArgument>& arguments = httpTemplate.arguments;
 		std::vector<Header>& requestHeaders = httpTemplate.requestHeaders;
@@ -953,12 +1048,12 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 
 		do
 		{
-			result = HTTPTemplateDialog().ShowDialogEx(templateDlgData);
+			result = HTTPDialogs::Template().ShowDialogEx(templateDlgData);
 			if (result == addArgId)
 			{
 				// configure argument
 				HTTPArgument argument{};
-				if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
+				if (HTTPDialogs::Argument().ShowDialogEx(argument) == HTTPDialogs::OK_ID)
 					if (ValidArgument(argument))
 						arguments.push_back(argument);
 			}
@@ -969,7 +1064,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				else if (listSelectedArg >= 0 && listSelectedArg < (int)arguments.size())
 				{
 					HTTPArgument argument = arguments[listSelectedArg];
-					if (HTTPArgumentDialog().ShowDialogEx(argument) == okId)
+					if (HTTPDialogs::Argument().ShowDialogEx(argument) == HTTPDialogs::OK_ID)
 						if (ValidArgument(argument, listSelectedArg))
 							arguments[listSelectedArg] = argument;
 				}
@@ -986,7 +1081,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			else if (result == addHeaderId)
 			{
 				Header requestHeader;
-				if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
+				if (HTTPDialogs::RequestHeader().ShowDialogEx(requestHeader) == HTTPDialogs::OK_ID)
 					requestHeaders.push_back(requestHeader);
 			}
 			else if (result == editSelectedHeaderId)
@@ -996,7 +1091,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				else if (listSelectedHeader >= 0 && listSelectedHeader < (int)requestHeaders.size())
 				{
 					Header requestHeader = requestHeaders[listSelectedHeader];
-					if (HTTPRequestHeaderDialog().ShowDialogEx(requestHeader) == okId)
+					if (HTTPDialogs::RequestHeader().ShowDialogEx(requestHeader) == HTTPDialogs::OK_ID)
 						requestHeaders[listSelectedHeader] = requestHeader;
 				}
 			}
@@ -1010,16 +1105,16 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				requestHeaders.clear();
 			}
 		}
-		while (result > cancelId);
+		while (result > HTTPDialogs::CANCEL_ID);
 
-		if (result == okId)
+		if (result == HTTPDialogs::OK_ID)
 		{
 			// save the template
 			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 			string templatesPath = settings.Get(0, L"TemplatesPath", L"");
 			string filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", templateDlgData.filename);
 			if (!IsValidTemplateExtension(filename.c_str()))
-				filename = concat(filename, extension);
+				filename = concat(filename, EXTENSION);
 
 			std::vector<uint8_t> templateBuffer;
 			httpTemplate.Serialize(templateBuffer);

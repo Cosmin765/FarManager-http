@@ -1,4 +1,4 @@
-﻿enum struct SynchroActionType: uint8_t
+﻿enum struct SynchroActionType : uint8_t
 {
 	UPDATE_PANEL,
 	SAVE_SCREEN,

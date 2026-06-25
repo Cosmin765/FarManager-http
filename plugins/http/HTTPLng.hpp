@@ -43,4 +43,7 @@
   MEphemeralGET,
   MView,
   MEdit,
+
+  MRequest,
+  MOpenSelection,
 };
