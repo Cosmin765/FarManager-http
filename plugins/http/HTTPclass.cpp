@@ -643,14 +643,16 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 
 		if (HTTPDialogs::OpenSelection().ShowDialogEx(osdd) == HTTPDialogs::OK_ID)
 		{
-			bool skipClipboard = true;
+			bool clipboardError = true;
 			curlProgressArguments.clear();
 			for (const auto& [selected, httpTemplate] : std::views::zip(osdd.selectedIndices, httpTemplates))
 			{
 				if (!selected)
 					continue;
 
-				PrepareTemplateArguments(httpTemplate, skipClipboard);
+				if (!PrepareTemplateArguments(httpTemplate, clipboardError, true))
+					continue;
+
 				ScheduleDownload(httpTemplate, true);
 			}
 			WaitDownloadsWrapper();
@@ -869,7 +871,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				if (!DeserializeTemplateFromFile(ppi->FileName, httpTemplate))
 					continue;
 
-				PrepareTemplateArguments(httpTemplate, skipClipboard);
+				if (!PrepareTemplateArguments(httpTemplate, skipClipboard, false))
+					continue;
 
 				if (Key == VK_F5)
 					httpTemplate.verb = HTTPVerb::HEAD;
@@ -1035,13 +1038,20 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 }
 
 
-void HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipClipboard)
+bool HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipboardError, bool skipClipboard)
 {
 	for (auto& arg : httpTemplate.arguments)
 	{
 		if (arg.retention == HTTPArgumentRetention::AskEverytime)
 		{
 			PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MHTTPArgumentValue, TEXT("Argument_Retention"));
+
+			string fname = httpTemplate.Filename;
+			if (fname.rfind(L'\\') != string::npos)
+				fname = fname.substr(fname.rfind(L'\\') + 1);
+			string tName = std::format(TEXT("Template Name: {}"), fname.substr(0, fname.size() - EXTENSION_LENGTH));
+
+			Builder.AddSeparator(tName.c_str());
 
 			Builder.AddText(TEXT("&Name"));
 			Builder.AddReadonlyEditField(arg.name.c_str(), 100);
@@ -1061,7 +1071,7 @@ void HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipC
 			}
 			else
 			{
-				continue;
+				return false;
 			}
 		}
 		else if (arg.retention == HTTPArgumentRetention::Clipboard)
@@ -1069,11 +1079,14 @@ void HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipC
 			if (skipClipboard)
 				continue;
 
+			if (clipboardError)
+				return false;
+
 			if (!OpenClipboard(NULL))
 			{
 				BasicErrorMessage({ L"Error", L"Error opening clipboard", LastWinAPIError().get(), L"\x01", L"&Ok" });
-				skipClipboard = true;
-				continue;
+				clipboardError = true;
+				return false;
 			}
 
 			SCOPE_EXIT{ CloseClipboard(); };
@@ -1082,16 +1095,16 @@ void HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipC
 			if (hData == NULL)
 			{
 				BasicErrorMessage({ L"Error", L"No text in clipboard", LastWinAPIError().get(), L"\x01", L"&Ok" });
-				skipClipboard = true;
-				continue;
+				clipboardError = true;
+				return false;
 			}
 
 			wchar_t* clipboardTextPtr = reinterpret_cast<wchar_t*>(GlobalLock(hData));
 			if (clipboardTextPtr == NULL)
 			{
 				BasicErrorMessage({ L"Error", L"Could not lock clipboard", LastWinAPIError().get(), L"\x01", L"&Ok" });
-				skipClipboard = true;
-				continue;
+				clipboardError = true;
+				return false;
 			}
 
 			SCOPE_EXIT{ GlobalUnlock(hData); };
@@ -1100,6 +1113,7 @@ void HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipC
 			arg.value = trim(string(clipboardTextPtr));
 		}
 	}
+	return true;
 }
 
 
@@ -1142,7 +1156,6 @@ void HTTPclass::WaitDownloads()
 		{
 			if (WaitForSingleObject(dldData.completed, 10) == WAIT_OBJECT_0)
 			{
-				// TODO: free the handle
 				completedHandles.push_back(curl);
 				completedDownloads.insert({ curl, dldData });
 
@@ -1401,7 +1414,8 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 	// delete the temp file
 	SCOPE_EXIT{
 		if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
-		CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
+			CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
+		curl_easy_cleanup(curl);
 	};
 
 	const auto& curlCode = dldData.result;

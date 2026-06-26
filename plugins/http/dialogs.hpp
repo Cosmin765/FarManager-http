@@ -3,7 +3,7 @@
 namespace HTTPDialogs
 {
 	constexpr intptr_t OK_ID = 0;
-	constexpr intptr_t CANCEL_ID = -1;
+	constexpr intptr_t CANCEL_ID = 1;
 
 	struct TemplateDialogData
 	{

@@ -95,7 +95,7 @@ private:
 	void WaitDownloadsWrapper();
 	void WaitDownloads();
 	bool ProcessResponse(CURL* curl, DldData& dldData);
-	void PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipClipboard);
+	bool PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipboardError, bool skipClipboard = false);
 
 public:
 	std::unordered_map<CURL*, DldData> downloadsInProgress;
