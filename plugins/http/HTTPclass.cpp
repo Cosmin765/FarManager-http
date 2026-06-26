@@ -719,40 +719,6 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 	case EE_GOTFOCUS:
 		{
 			currentlyOpenEditorId = Info->EditorID;
-
-			if (editorIds.find(Info->EditorID) == editorIds.end() && !IsHTTPEditor(Info->EditorID))
-				break;
-
-			KeyBarLabel kbl[2];
-			kbl[0] = {
-				.Key = {
-					.VirtualKeyCode = VK_F5,
-					.ControlKeyState = 0,
-			},
-			.Text = GetMsg(MInfo),
-			.LongText = GetMsg(MInfo),
-			};
-			kbl[1] = {
-				.Key = {
-					.VirtualKeyCode = VK_F4,
-					.ControlKeyState = SHIFT_PRESSED,
-			},
-			.Text = GetMsg(MRequest),
-			.LongText = GetMsg(MRequest),
-			};
-			KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
-			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
-			PsInfo.EditorControl(Info->EditorID, ECTL_SETKEYBAR, {}, &barTitles);
-
-			std::unique_ptr<SynchroAction> editorUpdateAction = std::make_unique<SynchroFunctionAction>([=](void*)
-			{
-				INPUT_RECORD rec{};
-				rec.EventType = KEY_EVENT;
-				rec.Event.KeyEvent.bKeyDown = true;
-				rec.Event.KeyEvent.wVirtualKeyCode = VK_LEFT;
-				PsInfo.EditorControl(currentlyOpenEditorId, ECTL_PROCESSINPUT, {}, &rec);
-			});
-			SendSynchroAction(std::move(editorUpdateAction)); // execute async
 		} break;
 	case EE_CLOSE:
 		{
@@ -1494,12 +1460,30 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_DELETEONCLOSE | EF_ENABLE_F6 | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
 				EditorInfo editorInfo = { sizeof(EditorInfo) };
 				PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, {}, &editorInfo);
-				if (IsHTTPEditor(editorInfo.EditorID))
-				{
-					editorIds.insert(editorInfo.EditorID);
-					editorInfoBuffers[editorInfo.EditorID] = GetInfoBuffer(curl);
-					editorData[editorInfo.EditorID] = dldData.httpTemplate.Filename;
-				}
+				editorIds.insert(editorInfo.EditorID);
+				editorInfoBuffers[editorInfo.EditorID] = GetInfoBuffer(curl);
+				editorData[editorInfo.EditorID] = dldData.httpTemplate.Filename;
+
+				KeyBarLabel kbl[2];
+				kbl[0] = {
+					.Key = {
+						.VirtualKeyCode = VK_F5,
+						.ControlKeyState = 0,
+				},
+				.Text = GetMsg(MInfo),
+				.LongText = GetMsg(MInfo),
+				};
+				kbl[1] = {
+					.Key = {
+						.VirtualKeyCode = VK_F4,
+						.ControlKeyState = SHIFT_PRESSED,
+				},
+				.Text = GetMsg(MRequest),
+				.LongText = GetMsg(MRequest),
+				};
+				KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
+				FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+				PsInfo.EditorControl(editorInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
 			}
 			else
 			{
