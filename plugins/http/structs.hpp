@@ -214,7 +214,7 @@ struct HTTPTemplate
 		return fullUrl;
 	}
 
-	SListPtr GetHeadersList() const
+	curl_slist* GetHeadersList() const
 	{
 		curl_slist* list = NULL;
 
@@ -223,7 +223,7 @@ struct HTTPTemplate
 			std::string headerStr = WideCharToMultiByte(name) + ":" + WideCharToMultiByte(value);
 			list = curl_slist_append(list, headerStr.c_str());
 		}
-		return SListPtr(list);
+		return list;
 	}
 
 	bool operator==(const HTTPTemplate&) const = default;

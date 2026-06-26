@@ -26,7 +26,7 @@ namespace HTTPDialogs
 	struct OpenSelectionDialogData
 	{
 		string selectedText;
-		std::vector<string> httpTemplateFilenames;
+		std::deque<string> httpTemplateFilenames;
 		std::deque<bool> selectedIndices;
 	};
 

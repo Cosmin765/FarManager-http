@@ -25,13 +25,28 @@ struct PluginPanel
 	std::unordered_set<string> AddedItems;
 };
 
-struct DldThreadData
+struct DldData
 {
 	HTTPTemplate httpTemplate;
 	bool edit = false;
-	const wchar_t* url = nullptr;
+	const std::string url;
+	const string wideUrl;
+	curl_slist* headers = nullptr;  // TODO: switch back to SListPtr
+	std::string postdata;
+	CURLcode result = CURLE_ABORTED_BY_CALLBACK;
+	HANDLE completed = CreateEvent({}, TRUE, FALSE, {});
+	wchar_t tempFile[MAX_PATH + 1]{};
+	HANDLE tempFileHandle = INVALID_HANDLE_VALUE;
 	curl_off_t dlnow = 0;
 	curl_off_t dltotal = 0;
+};
+
+class HTTPclass;
+
+struct CurlProgressArgument
+{
+	HTTPclass* panel = nullptr;
+	CURL* curl = nullptr;
 };
 
 class HTTPclass
@@ -46,7 +61,7 @@ public:
 	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, const OPERATION_MODES OpMode);
 	bool PutFiles(std::span<const PluginPanelItem> Files, const wchar_t* SrcPath, OPERATION_MODES OpMode);
 	int ProcessKey(const INPUT_RECORD* Rec);
-	std::string GetInfoBuffer();
+	std::string GetInfoBuffer(CURL* curl);
 	void DisplayInfo(const std::string& buffer);
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
 	intptr_t ProcessSynchroEventW(SynchroAction* event);
@@ -68,38 +83,41 @@ private:
 	bool LoadTemplateItems();
 	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
 
-	// sends the HEAD request for gathering the HTTP headers from the server
-	CURLcode ObtainHttpHeaders(const HTTPTemplate& httpTemplate);
 	// returns a vector of pairs of all the headers
 	// useful for displaying but computationally expensive
-	std::vector<std::pair<std::string, std::string>> GetAllHeaders();
+	std::vector<std::pair<std::string, std::string>> GetAllHeaders(CURL* curl);
 	// obtains the value for the content-type header
 	// a call to ObtainHttpHeaders needs to be made before calling this function
-	ContentType GetHTTPContentType();
-	// performs a GET request and saves the body to a specified file
-	CURLcode HttpDownload(const HTTPTemplate& httpTemplate, HANDLE fileHandle, const char* postdata);
-	// performs a request through the curl multi interface
-	CURLcode MultiCurlPerform();
-	bool OpenURL(HTTPTemplate& httpTemplate, bool edit = false);
+	ContentType GetHTTPContentType(CURL* curl);
+
+	void CurlPerformDaemon();
+	bool ScheduleDownload(HTTPTemplate& httpTemplate, bool edit = false);
+	void WaitDownloadsWrapper();
+	void WaitDownloads();
+	bool ProcessResponse(CURL* curl, DldData& dldData);
+	void PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& skipClipboard);
 
 public:
-	DldThreadData currentDld;
+	std::unordered_map<CURL*, DldData> downloadsInProgress;
+	std::unordered_map<CURL*, DldData> completedDownloads;
+	HANDLE downloadsMutex = CreateMutex({}, FALSE, {});
 	std::atomic<bool> dldShouldCancel = false;
-	std::atomic<bool> curlEasyPerformInProgress = false;
 	std::atomic<bool> dldInProgress = false;
-	HANDLE dldShouldRun = CreateEvent({}, TRUE, TRUE, {});
+	std::atomic<HANDLE> dldShouldRun = CreateEvent({}, TRUE, FALSE, {});
+	std::vector<std::unique_ptr<CurlProgressArgument>> curlProgressArguments;
 
 private:
 	PluginPanel pp;
-	CURL* curl = nullptr;
 	CURLM* curlm = nullptr;
-	std::atomic<HANDLE> hDldThread = NULL;
+	HANDLE hCurlThread = NULL;
+	HANDLE hWaitThread = NULL;
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
 	std::unordered_set<intptr_t> editorIds;
 	intptr_t currentlyOpenEditorId = -1;
 	std::unordered_map<intptr_t, std::string> editorInfoBuffers;
+	std::unordered_map<intptr_t, string> editorData;
 
 	static constexpr wchar_t EXTENSION[] = L".htmpl";
 	static constexpr size_t EXTENSION_LENGTH = std::size(EXTENSION) - 1;
