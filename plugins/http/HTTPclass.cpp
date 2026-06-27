@@ -549,9 +549,54 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 		return TRUE;
 	}
 
-	if (OnlyAnyShiftPressed && Key == VK_F3)
+	if (OnlyAnyShiftPressed && (Key == VK_F3 || Key == VK_RETURN))
 	{
-		// TODO: shift + F3 to expand the selection inside quotes?
+		EditorGetString egs = {
+			.StructSize = sizeof(EditorGetString),
+			.StringNumber = -1,
+		};
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETSTRING, NULL, &egs);
+
+		if (egs.SelStart != -1)  // already selected
+			return TRUE;
+
+		EditorInfo editorInfo = { sizeof(EditorInfo) };
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETINFO, {}, &editorInfo);
+
+		intptr_t start = editorInfo.CurPos, end = editorInfo.CurPos;
+
+		while (start > 0 && iswalnum(egs.StringText[start - 1]))
+			--start;
+
+		if (iswalnum(egs.StringText[end]))
+		{
+			while (end < egs.StringLength - 1 && iswalnum(egs.StringText[end + 1]))
+				++end;
+		}
+
+		EditorSetPosition esp = {
+			.StructSize = sizeof(EditorSetPosition),
+			.CurLine = -1,
+			.CurPos = end + 1,
+			.CurTabPos = -1,
+			.TopScreenLine = -1,
+			.LeftPos = -1,
+			.Overtype = -1,
+		};
+
+		EditorSelect editorSelect = {
+			.StructSize = sizeof(EditorSelect),
+			.BlockType = BTYPE_STREAM,
+			.BlockStartLine = editorInfo.CurLine,
+			.BlockStartPos = start,
+			.BlockWidth = end - start + 1,
+			.BlockHeight = 1,
+		};
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_SELECT, {}, &editorSelect);
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_SETPOSITION, {}, &esp);
+		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_REDRAW, {}, {});
+
+		return TRUE;
 	}
 
 	if (OnlyAnyShiftPressed && Key == VK_F4)
@@ -619,7 +664,6 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 				if (arg.retention == HTTPArgumentRetention::Clipboard)
 				{
 					hasClipboardArg = true;
-					arg.value = osdd.selectedText;
 					break;
 				}
 			}
@@ -649,6 +693,15 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 			{
 				if (!selected)
 					continue;
+
+				for (auto& arg : httpTemplate.arguments)
+				{
+					if (arg.retention == HTTPArgumentRetention::Clipboard)
+					{
+						arg.value = osdd.selectedText;
+						break;
+					}
+				}
 
 				if (!PrepareTemplateArguments(httpTemplate, clipboardError, true))
 					continue;
@@ -716,7 +769,12 @@ void HTTPclass::CleanupDownload(CURL* curl, const DldData& dldData)
 {
 	if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
 		CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
-	DeleteFile(dldData.tempFile);
+
+	DWORD dwAttrib = GetFileAttributes(dldData.tempFile);
+	bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+	if (isFile)
+		DeleteFile(dldData.tempFile);
+
 	if (dldData.headers != nullptr)
 		curl_slist_free_all(dldData.headers);
 	completedDownloads.erase(curl);
@@ -789,12 +847,11 @@ intptr_t HTTPclass::ProcessViewerEventW(const ProcessViewerEventInfo* Info)
 
 int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 {
+	if (Rec->EventType == MOUSE_EVENT)  // NOTE: mouse does not get passed through yet (https://api.farmanager.com/ru/exported_functions/processpanelinputw.html)
+		return dldInProgress; // don't handle if dlding
+
 	if (Rec->EventType != KEY_EVENT)
 		return FALSE;
-
-	// TODO: this doesn't work, mouse still propagates through
-	if (Rec->EventType == MOUSE_EVENT)
-		return dldInProgress; // don't handle if dlding
 
 	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
 	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
@@ -1482,7 +1539,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			// open response buffer in viewer/editor
 			if (dldData.edit)
 			{
-				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
+				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
 				EditorInfo editorInfo = { sizeof(EditorInfo) };
 				PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, {}, &editorInfo);
 				editorIds.insert(editorInfo.EditorID);
@@ -1512,7 +1569,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			}
 			else
 			{
-				PsInfo.Viewer(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_ENABLE_F6 | VF_IMMEDIATERETURN, CP_DEFAULT);
+				PsInfo.Viewer(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_ENABLE_F6 | VF_DELETEONLYFILEONCLOSE | VF_IMMEDIATERETURN, CP_DEFAULT);
 				ViewerInfo viewerInfo = { sizeof(ViewerInfo) };
 				PsInfo.ViewerControl(-1, VCTL_GETINFO, {}, &viewerInfo);
 				viewerIds.insert(viewerInfo.ViewerID);
