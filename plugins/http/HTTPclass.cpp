@@ -343,9 +343,9 @@ void HTTPclass::CurlPerformDaemon()
 				msg = curl_multi_info_read(curlm, &msgq);
 				if (msg && (msg->msg == CURLMSG_DONE))
 				{
-					DldData& dldData = downloadsInProgress[msg->easy_handle];
-					SetEvent(dldData.completed);
-					dldData.result = msg->data.result;
+					auto dldData = downloadsInProgress[msg->easy_handle];
+					SetEvent(dldData->completed);
+					dldData->result = msg->data.result;
 					curl_multi_remove_handle(curlm, msg->easy_handle);
 				}
 			}
@@ -354,7 +354,6 @@ void HTTPclass::CurlPerformDaemon()
 
 		lastRunningHandles = runningHandles;
 	}
-	// TODO: better error handling
 }
 
 
@@ -415,9 +414,9 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 	WaitForSingleObject(panel->downloadsMutex, INFINITE);
 	if (panel->downloadsInProgress.find(curl) != panel->downloadsInProgress.end())
 	{
-		auto& currentDld = panel->downloadsInProgress[curl];
-		currentDld.dlnow = dlnow;
-		currentDld.dltotal = dltotal;
+		auto currentDld = panel->downloadsInProgress[curl];
+		currentDld->dlnow = dlnow;
+		currentDld->dltotal = dltotal;
 	}
 	ReleaseMutex(panel->downloadsMutex);
 
@@ -515,12 +514,12 @@ void HTTPclass::DisplayInfo(const std::string& buffer)
 		DWORD written;
 		if (!WriteFile(hFile, buffer.c_str(), buffer.size(), &written, {}))
 		{
-			BasicErrorMessage({ L"Error", L"Could not reserve name for headers file", LastWinAPIError().get(), L"\x01", L"&Ok" });
+			BasicErrorMessage({ L"Error", L"Could not write to headers file", LastWinAPIError().get(), L"\x01", L"&Ok" });
 			return;
 		}
 	}
 
-	PsInfo.Editor(headersFilepath, headersFilepath, 0, 0, -1, -1, EF_DELETEONCLOSE, 1, 1, CP_DEFAULT);
+	PsInfo.Editor(headersFilepath, headersFilepath, 0, 0, -1, -1, EF_DELETEONLYFILEONCLOSE, 1, 1, CP_DEFAULT);
 }
 
 
@@ -627,7 +626,7 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 			if (!hasClipboardArg)
 				continue;
 
-			if (editorData[currentlyOpenEditorId] == httpTemplate.Filename)
+			if (editorData[currentlyOpenEditorId].filename == httpTemplate.Filename)
 			{
 				osdd.selectedIndices.push_front(true);
 				httpTemplates.push_front(httpTemplate);
@@ -712,6 +711,16 @@ std::string HTTPclass::GetInfoBuffer(CURL* curl)
 }
 
 
+void HTTPclass::CleanupDownload(CURL* curl, const DldData& dldData)
+{
+	if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
+		CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
+	DeleteFile(dldData.tempFile);
+	completedDownloads.erase(curl);
+	curl_easy_cleanup(curl);
+}
+
+
 intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 {
 	switch (Info->Event)
@@ -726,11 +735,48 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 				break;
 			editorIds.erase(Info->EditorID);
 			editorInfoBuffers.erase(Info->EditorID);
+
+			CURL* curl = editorData[Info->EditorID].curl;
+			const auto& dldData = completedDownloads[curl];
+
+			CleanupDownload(curl, *dldData);
+			
 			editorData.erase(Info->EditorID);
 		} break;
 	case EE_KILLFOCUS:
 		{
 			currentlyOpenEditorId = -1;
+		} break;
+	}
+
+	return FALSE;
+}
+
+intptr_t HTTPclass::ProcessViewerEventW(const ProcessViewerEventInfo* Info)
+{
+	switch (Info->Event)
+	{
+	case VE_GOTFOCUS:
+		{
+			currentlyOpenViewerId = Info->ViewerID;
+		} break;
+	case VE_CLOSE:
+		{
+			if (viewerIds.find(Info->ViewerID) == viewerIds.end())
+				break;
+			viewerIds.erase(Info->ViewerID);
+			viewerInfoBuffers.erase(Info->ViewerID);
+
+			CURL* curl = viewerData[Info->ViewerID].curl;
+			const auto& dldData = completedDownloads[curl];
+
+			CleanupDownload(curl, *dldData);
+
+			viewerData.erase(Info->ViewerID);
+		} break;
+	case VE_KILLFOCUS:
+		{
+			currentlyOpenViewerId = -1;
 		} break;
 	}
 
@@ -773,8 +819,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			for (const auto& [curl, dldData] : downloadsInProgress)
 			{
 				curl_multi_remove_handle(curlm, curl);
-				DldData& dldData = downloadsInProgress[curl];
-				SetEvent(dldData.completed);
+				auto dldData = downloadsInProgress[curl];
+				SetEvent(dldData->completed);
 			}
 			ReleaseMutex(downloadsMutex);
 			curl_multi_wakeup(curlm);
@@ -1113,20 +1159,21 @@ void HTTPclass::WaitDownloads()
 	SCOPE_EXIT{ dldInProgress = false; };
 	SetEvent(dldShouldRun);
 
-	completedDownloads.clear();
+	std::deque<std::pair<CURL*, std::shared_ptr<DldData>>> currentlyCompletedDownloads;
 
 	while (downloadsInProgress.size() > 0)
 	{
 		std::deque<CURL*> completedHandles;
 		for (auto& [curl, dldData] : downloadsInProgress)
 		{
-			if (WaitForSingleObject(dldData.completed, 10) == WAIT_OBJECT_0)
+			if (WaitForSingleObject(dldData->completed, 10) == WAIT_OBJECT_0)
 			{
 				completedHandles.push_back(curl);
-				completedDownloads.insert({ curl, dldData });
+				completedDownloads[curl] = dldData;
+				currentlyCompletedDownloads.push_back({ curl, dldData });
 
-				CloseHandle(dldData.completed);
-				dldData.completed = INVALID_HANDLE_VALUE;
+				CloseHandle(dldData->completed);
+				dldData->completed = INVALID_HANDLE_VALUE;
 			}
 		}
 
@@ -1139,8 +1186,8 @@ void HTTPclass::WaitDownloads()
 		}
 	}
 
-	for (auto& [curl, dldData] : completedDownloads)
-		ProcessResponse(curl, dldData);
+	for (auto& [curl, dldData] : currentlyCompletedDownloads)
+		ProcessResponse(curl, *dldData);
 }
 
 
@@ -1179,18 +1226,18 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 
 			if (downloadsInProgress.size() == 1)
 			{
-				const auto& currentDld = downloadsInProgress.begin()->second;
-				const auto& dlnow = currentDld.dlnow;
-				const auto& dltotal = currentDld.dltotal;
+				auto currentDld = downloadsInProgress.begin()->second;
+				const auto& dlnow = currentDld->dlnow;
+				const auto& dltotal = currentDld->dltotal;
 				if (dltotal == 0)
 				{
-					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld.wideUrl.c_str() };
+					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str() };
 					PsInfo.Message(&MainGuid, &DldInfoMsg, 0, TEXT("DldInfo"), MsgItems, std::size(MsgItems), 0);
 				}
 				else
 				{
 					string sizeFormatted = std::format(TEXT("Downloaded {} / {} bytes [{:.2f}%]"), dlnow, dltotal, 100 * (float)dlnow / (float)dltotal);
-					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld.wideUrl.c_str(), sizeFormatted.c_str() };
+					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str(), sizeFormatted.c_str() };
 					PsInfo.Message(&MainGuid, &ProgressMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
 				}
 			}
@@ -1239,32 +1286,6 @@ void HTTPclass::SendSynchroAction(std::unique_ptr<SynchroAction> action)
 
 bool HTTPclass::ScheduleDownload(HTTPTemplate& httpTemplate, bool edit)
 {
-	{
-		FarPanelDirectory fpd{};
-		fpd.StructSize = sizeof(FarPanelDirectory);
-		fpd.PluginId = MainGuid;
-		string downloadsPath;
-		{
-			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
-			downloadsPath = settings.Get(0, L"DownloadsPath", nullptr);
-		}
-		if (downloadsPath.size() > 0)
-		{
-			fpd.Name = downloadsPath.c_str();
-			// TODO: check how it should be done in order to set the current directory for saving the files with shift + F2
-			//std::filesystem::current_path(downloadsPath);
-			PsInfo.PanelControl(PANEL_ACTIVE, FCTL_SETPANELDIRECTORY, 0, &fpd);
-
-			size_t Size = PsInfo.PanelControl(PANEL_ACTIVE, FCTL_GETPANELDIRECTORY, 0, {});
-			FarPanelDirectory* Dir = reinterpret_cast<FarPanelDirectory*>(malloc(Size));
-			SCOPE_EXIT{ free(Dir); };
-
-			Dir->StructSize = sizeof(*Dir);
-			PsInfo.PanelControl(PANEL_ACTIVE, FCTL_GETPANELDIRECTORY, Size, Dir);
-			string ListPath = Dir->Name;
-		}
-	}
-
 	if (!curlm)  // not initialised
 	{
 		BasicErrorMessage({ L"Error", L"CURL multi was not properly initialized", L"\x01", L"&Ok" });
@@ -1294,12 +1315,14 @@ bool HTTPclass::ScheduleDownload(HTTPTemplate& httpTemplate, bool edit)
 		return false;
 	}
 
-	dldData.tempFileHandle = CreateFile(dldData.tempFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-	if (dldData.tempFileHandle == INVALID_HANDLE_VALUE)
+	if (httpTemplate.verb != HTTPVerb::HEAD)
 	{
-		BasicErrorMessage({ L"Error", L"Could not create temp file", dldData.tempFile, LastWinAPIError().get(), L"\x01", L"&Ok" });
-		return false;
+		dldData.tempFileHandle = CreateFile(dldData.tempFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (dldData.tempFileHandle == INVALID_HANDLE_VALUE)
+		{
+			BasicErrorMessage({ L"Error", L"Could not create temp file", dldData.tempFile, LastWinAPIError().get(), L"\x01", L"&Ok" });
+			return false;
+		}
 	}
 
 	dldData.headers = httpTemplate.GetHeadersList();
@@ -1370,20 +1393,13 @@ bool HTTPclass::ScheduleDownload(HTTPTemplate& httpTemplate, bool edit)
 		return false;
 	}
 
-	downloadsInProgress.insert({ curl, dldData });
+	downloadsInProgress[curl] = std::make_shared<DldData>(dldData);
 	return true;
 }
 
 
 bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 {
-	// delete the temp file
-	SCOPE_EXIT{
-		if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
-			CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
-		curl_easy_cleanup(curl);
-	};
-
 	const auto& curlCode = dldData.result;
 	if (curlCode != CURLE_OK)
 	{
@@ -1392,6 +1408,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
 			BasicErrorMessage({ L"HTTP error", dldData.wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok" });
 		}
+		CleanupDownload(curl, dldData);
 		return false;
 	}
 
@@ -1400,6 +1417,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 		SendSynchroAction(SynchroFunctionAction([=](void*)
 			{
 				DisplayInfo(GetInfoBuffer(curl));
+				CleanupDownload(curl, dldData);
 			})); // execute sync
 		return true;
 	}
@@ -1448,6 +1466,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 		if (!MoveFile(oldName.c_str(), dldData.tempFile))
 		{
 			BasicErrorMessage({ L"HTTP error", L"Could not add extension", LastWinAPIError().get(), L"\x01", L"&Ok"});
+			CleanupDownload(curl, dldData);
 			return false;
 		}
 	}
@@ -1457,12 +1476,12 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			// open response buffer in viewer/editor
 			if (dldData.edit)
 			{
-				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_DELETEONCLOSE | EF_ENABLE_F6 | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
+				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
 				EditorInfo editorInfo = { sizeof(EditorInfo) };
 				PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, {}, &editorInfo);
 				editorIds.insert(editorInfo.EditorID);
 				editorInfoBuffers[editorInfo.EditorID] = GetInfoBuffer(curl);
-				editorData[editorInfo.EditorID] = dldData.httpTemplate.Filename;
+				editorData[editorInfo.EditorID] = { .filename = dldData.httpTemplate.Filename, .curl = curl };
 
 				KeyBarLabel kbl[2];
 				kbl[0] = {
@@ -1487,8 +1506,12 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			}
 			else
 			{
-				// TODO: now immediate return works!!!
-				PsInfo.Viewer(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE | VF_ENABLE_F6 | VF_IMMEDIATERETURN, CP_DEFAULT);
+				PsInfo.Viewer(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_ENABLE_F6 | VF_IMMEDIATERETURN, CP_DEFAULT);
+				ViewerInfo viewerInfo = { sizeof(ViewerInfo) };
+				PsInfo.ViewerControl(-1, VCTL_GETINFO, {}, &viewerInfo);
+				viewerIds.insert(viewerInfo.ViewerID);
+				viewerInfoBuffers[viewerInfo.ViewerID] = GetInfoBuffer(curl);
+				viewerData[viewerInfo.ViewerID] = { .filename = dldData.httpTemplate.Filename, .curl = curl };
 			}
 		}));
 

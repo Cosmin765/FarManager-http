@@ -83,14 +83,12 @@ intptr_t WINAPI SetDirectoryW(const SetDirectoryInfo* Info)
 }
 
 
-//intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
-//{
-//	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
-//	
-//	//VE_READ
-//	//Info->Param
-//	return 0;
-//}
+intptr_t WINAPI ProcessViewerEventW(const ProcessViewerEventInfo* Info)
+{
+	if (PanelHandle == INVALID_HANDLE_VALUE)
+		return FALSE;
+	return static_cast<HTTPclass*>(PanelHandle)->ProcessViewerEventW(Info);
+}
 
 
 HANDLE WINAPI OpenW(const struct OpenInfo *OInfo)

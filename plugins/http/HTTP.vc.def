@@ -13,3 +13,4 @@ EXPORTS
   ProcessEditorInputW
   ProcessEditorEventW
   SetDirectoryW
+  ProcessViewerEventW

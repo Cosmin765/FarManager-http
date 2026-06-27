@@ -41,6 +41,12 @@ struct DldData
 	curl_off_t dltotal = 0;
 };
 
+struct PanelDldData
+{
+	string filename;
+	CURL* curl;
+};
+
 class HTTPclass;
 
 struct CurlProgressArgument
@@ -66,6 +72,7 @@ public:
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
 	intptr_t ProcessSynchroEventW(SynchroAction* event);
 	intptr_t ProcessEditorEventW(const ProcessEditorEventInfo* Info);
+	intptr_t ProcessViewerEventW(const ProcessViewerEventInfo* Info);
 
 	// send blocking event to synchro
 	void SendSynchroAction(const SynchroAction& event);
@@ -96,10 +103,11 @@ private:
 	void WaitDownloads();
 	bool ProcessResponse(CURL* curl, DldData& dldData);
 	bool PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipboardError, bool skipClipboard = false);
+	void CleanupDownload(CURL* curl, const DldData& dldData);
 
 public:
-	std::unordered_map<CURL*, DldData> downloadsInProgress;
-	std::unordered_map<CURL*, DldData> completedDownloads;
+	std::unordered_map<CURL*, std::shared_ptr<DldData>> downloadsInProgress;
+	std::unordered_map<CURL*, std::shared_ptr<DldData>> completedDownloads;
 	HANDLE downloadsMutex = CreateMutex({}, FALSE, {});
 	std::atomic<bool> dldShouldCancel = false;
 	std::atomic<bool> dldInProgress = false;
@@ -114,10 +122,18 @@ private:
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
+
+	// editor state
 	std::unordered_set<intptr_t> editorIds;
 	intptr_t currentlyOpenEditorId = -1;
 	std::unordered_map<intptr_t, std::string> editorInfoBuffers;
-	std::unordered_map<intptr_t, string> editorData;
+	std::unordered_map<intptr_t, PanelDldData> editorData;
+
+	// viewer state
+	std::unordered_set<intptr_t> viewerIds;
+	intptr_t currentlyOpenViewerId = -1;
+	std::unordered_map<intptr_t, std::string> viewerInfoBuffers;
+	std::unordered_map<intptr_t, PanelDldData> viewerData;
 
 	static constexpr wchar_t EXTENSION[] = L".htmpl";
 	static constexpr size_t EXTENSION_LENGTH = std::size(EXTENSION) - 1;

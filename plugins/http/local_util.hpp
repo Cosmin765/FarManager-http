@@ -69,10 +69,21 @@ inline const wchar_t* NullToEmpty(const wchar_t* Str)
 
 inline bool GetTempPathWithExtension(wchar_t* buffer, size_t bufferChars, const wchar_t* extension)
 {
-	wchar_t tempDir[MAX_PATH];
-	if (GetTempPath2W(MAX_PATH, tempDir) == 0)
-		return false;
-	if (GetTempFileNameW(tempDir, L"HTTPFAR", 0, buffer) == 0)
+	wchar_t dirPath[MAX_PATH + 1]{};
+	{
+		PluginSettings settings(MainGuid, PsInfo.SettingsControl);
+		const wchar_t* dldPath = settings.Get(0, L"DownloadsPath", nullptr);
+		std::filesystem::create_directories(dldPath);
+		wcsncpy_s(dirPath, dldPath, MAX_PATH);
+	}
+	size_t dirLen = wcsnlen_s(dirPath, MAX_PATH);
+	if (dirLen == 0)
+	{
+		if (GetTempPath2W(MAX_PATH, dirPath) == 0)
+			return false;
+	}
+
+	if (GetTempFileNameW(dirPath, L"HTTPFAR", 0, buffer) == 0)  // TODO: provide name of the template file
 		return false;
 	DeleteFileW(buffer);
 	size_t occupiedSize = wcsnlen_s(buffer, MAX_PATH);
