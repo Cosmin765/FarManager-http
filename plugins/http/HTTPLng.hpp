@@ -46,4 +46,5 @@
 
   MRequest,
   MOpenSelection,
+  MSelect,
 };

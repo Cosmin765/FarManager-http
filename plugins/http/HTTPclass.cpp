@@ -209,6 +209,8 @@ bool HTTPclass::LoadTemplateItems()
 
 	for (const auto& i : std::span(ppi, count))
 	{
+		bool isDirectory = i.FileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+		//if (!isDirectory && !IsValidTemplate(i))  // TODO: implement directories
 		if (!IsValidTemplate(i))
 			continue;
 		PutOneFile(templatesPath, i);
@@ -266,7 +268,9 @@ bool HTTPclass::PutOneFile(const string& SrcPath, const PluginPanelItem& PanelIt
 	if (!SrcPath.empty() && !contains(PanelItem.FileName, L'\\'))
 		FileName = concat(SrcPath, SrcPath.back() == L'\\' ? L"" : L"\\", FileName);
 
-	FileName = FileName.substr(0, FileName.size() - EXTENSION_LENGTH);
+	bool isDirectory = PanelItem.FileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+	if (!isDirectory)
+		FileName = FileName.substr(0, FileName.size() - EXTENSION_LENGTH);
 
 	if (pp.AddedItems.find(FileName) != pp.AddedItems.end())
 		return false;  // already added
@@ -1546,22 +1550,30 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 				editorInfoBuffers[editorInfo.EditorID] = GetInfoBuffer(curl);
 				editorData[editorInfo.EditorID] = { .filename = dldData.httpTemplate.Filename, .curl = curl };
 
-				KeyBarLabel kbl[2];
+				KeyBarLabel kbl[3];
 				kbl[0] = {
 					.Key = {
 						.VirtualKeyCode = VK_F5,
 						.ControlKeyState = 0,
-				},
-				.Text = GetMsg(MInfo),
-				.LongText = GetMsg(MInfo),
+					},
+					.Text = GetMsg(MInfo),
+					.LongText = GetMsg(MInfo),
 				};
 				kbl[1] = {
 					.Key = {
 						.VirtualKeyCode = VK_F4,
 						.ControlKeyState = SHIFT_PRESSED,
+					},
+					.Text = GetMsg(MRequest),
+					.LongText = GetMsg(MRequest),
+				};
+				kbl[2] = {
+					.Key = {
+						.VirtualKeyCode = VK_F3,
+						.ControlKeyState = SHIFT_PRESSED,
 				},
-				.Text = GetMsg(MRequest),
-				.LongText = GetMsg(MRequest),
+				.Text = GetMsg(MSelect),
+				.LongText = GetMsg(MSelect),
 				};
 				KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
 				FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
