@@ -67,7 +67,7 @@ inline const wchar_t* NullToEmpty(const wchar_t* Str)
 	return Str? Str : L"";
 }
 
-inline bool GetTempPathWithExtension(wchar_t* buffer, size_t bufferChars, const wchar_t* extension)
+inline bool GetTempPathWithExtension(wchar_t* buffer, size_t bufferChars, const wchar_t* extension, const wchar_t* prefixString = L"HTTPFAR")
 {
 	wchar_t dirPath[MAX_PATH + 1]{};
 	{
@@ -83,7 +83,7 @@ inline bool GetTempPathWithExtension(wchar_t* buffer, size_t bufferChars, const 
 			return false;
 	}
 
-	if (GetTempFileNameW(dirPath, L"HTTPFAR", 0, buffer) == 0)  // TODO: provide name of the template file
+	if (GetTempFileNameW(dirPath, prefixString, 0, buffer) == 0)
 		return false;
 	DeleteFileW(buffer);
 	size_t occupiedSize = wcsnlen_s(buffer, MAX_PATH);

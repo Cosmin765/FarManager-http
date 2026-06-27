@@ -31,7 +31,7 @@ struct DldData
 	bool edit = false;
 	const std::string url;
 	const string wideUrl;
-	curl_slist* headers = nullptr;  // TODO: switch back to SListPtr
+	curl_slist* headers = nullptr;
 	std::string postdata;
 	CURLcode result = CURLE_ABORTED_BY_CALLBACK;
 	HANDLE completed = CreateEvent({}, TRUE, FALSE, {});

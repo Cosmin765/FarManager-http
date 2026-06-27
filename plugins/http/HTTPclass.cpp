@@ -2,8 +2,6 @@
 
 PluginStartupInfo PsInfo;
 
-// send ACTL_SYNCHRO AdvControl events
-// TODO: add events - use ReadDirectoryChangesW (https://gist.github.com/nickav/a57009d4fcc3b527ed0f5c9cf30618f8) to monitor for changes
 
 HTTPclass::HTTPclass() {
 	assert(test_StringSerializer());
@@ -110,7 +108,6 @@ bool HTTPclass::EnsureTemplatesPath()
 	if (!templatesPath || templatesPath[0] == L'\0')
 	{
 		// initialise the path
-		// TODO: internationalise
 		wchar_t templatesPath[MAX_PATH] = L"C:\\FarManager-HTTP";
 		const wchar_t* boxTitle = L"Templates Path";
 		const wchar_t* boxSubTitle = L"Where will HTTP templates be stored?";
@@ -228,14 +225,18 @@ void HTTPclass::CheckLoadedTemplates()
 	for (size_t i = 0; i < pp.Items.size();)
 	{
 		const auto& item = pp.Items[i];
-		DWORD dwAttrib = GetFileAttributes(item.FileName);
+		string Filename = item.FileName;
+		if (!IsValidTemplateExtension(Filename.c_str()))
+			Filename = concat(Filename, EXTENSION);
+
+		DWORD dwAttrib = GetFileAttributes(Filename.c_str());
 		bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 		if (!isFile)
 		{
+			pp.OwnerData.erase(std::next(pp.OwnerData.begin(), i));
+			pp.StringData.erase(std::next(pp.StringData.begin(), i));
 			pp.AddedItems.erase(item.FileName);
 			pp.Items.erase(pp.Items.begin() + i);
-			// TODO: technically, we should also remove from pp.StringData, pp.OwnerData
-			// but I'm not going to worry about that right now
 		}
 		else
 		{
@@ -716,6 +717,8 @@ void HTTPclass::CleanupDownload(CURL* curl, const DldData& dldData)
 	if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
 		CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
 	DeleteFile(dldData.tempFile);
+	if (dldData.headers != nullptr)
+		curl_slist_free_all(dldData.headers);
 	completedDownloads.erase(curl);
 	curl_easy_cleanup(curl);
 }
@@ -1121,7 +1124,6 @@ bool HTTPclass::PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipb
 
 			SCOPE_EXIT{ GlobalUnlock(hData); };
 
-			// TODO: do something with Content-Disposition -> attachment; filename=Far.x64.3.0.6644.4772.1a4340d7d218edd01cd5bd09b2cfe011711e0125.msi
 			arg.value = trim(string(clipboardTextPtr));
 		}
 	}
@@ -1309,14 +1311,18 @@ bool HTTPclass::ScheduleDownload(HTTPTemplate& httpTemplate, bool edit)
 		.wideUrl = wideUrl,
 	};
 
-	if (!GetTempPathWithExtension(dldData.tempFile, MAX_PATH, L""))
-	{
-		BasicErrorMessage({ L"Error", L"Could not reserve name for temp file", LastWinAPIError().get(), L"\x01", L"&Ok" });
-		return false;
-	}
-
 	if (httpTemplate.verb != HTTPVerb::HEAD)
 	{
+		string_view fname = httpTemplate.Filename;
+		if (fname.rfind(L'\\') != string::npos)
+			fname = fname.substr(fname.rfind(L'\\') + 1);
+
+		if (!GetTempPathWithExtension(dldData.tempFile, MAX_PATH, L"", fname.data()))
+		{
+			BasicErrorMessage({ L"Error", L"Could not reserve name for temp file", LastWinAPIError().get(), L"\x01", L"&Ok" });
+			return false;
+		}
+
 		dldData.tempFileHandle = CreateFile(dldData.tempFile, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (dldData.tempFileHandle == INVALID_HANDLE_VALUE)
 		{

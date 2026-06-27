@@ -112,15 +112,6 @@ struct HTTPArgument
 
 using Header = std::pair<string, string>;
 
-struct SListDeleter
-{
-	void operator()(curl_slist* p) const
-	{
-		if (p) curl_slist_free_all(p);
-	}
-};
-using SListPtr = std::unique_ptr<curl_slist, SListDeleter>;
-
 struct HTTPTemplate
 {
 	HTTPVerb verb;
