@@ -36,6 +36,7 @@ HTTPclass::HTTPclass() {
 		BasicErrorMessage({ L"Error", L"Error creating curl daemon thread", LastWinAPIError().get(), L"\x01", L"&Ok" });
 }
 
+
 HTTPclass::~HTTPclass() {
 	// curl cleanup
 
@@ -43,8 +44,10 @@ HTTPclass::~HTTPclass() {
 	{
 		curl_multi_cleanup(curlm);
 		curl_global_cleanup();
+		curlm = nullptr;
 	}
 }
+
 
 void HTTPclass::GetOpenPanelInfo(OpenPanelInfo* Info)
 {
@@ -235,9 +238,9 @@ void HTTPclass::CheckLoadedTemplates()
 		bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
 		if (!isFile)
 		{
+			pp.AddedItems.erase(item.FileName);
 			pp.OwnerData.erase(std::next(pp.OwnerData.begin(), i));
 			pp.StringData.erase(std::next(pp.StringData.begin(), i));
-			pp.AddedItems.erase(item.FileName);
 			pp.Items.erase(pp.Items.begin() + i);
 		}
 		else
@@ -362,20 +365,6 @@ void HTTPclass::CurlPerformDaemon()
 }
 
 
-std::vector<std::pair<std::string, std::string>> HTTPclass::GetAllHeaders(CURL* curl)
-{
-	curl_header* prev = nullptr;
-	curl_header* h;
-	std::vector<std::pair<std::string, std::string>> headers;
-	while ((h = curl_easy_nextheader(curl, CURLH_HEADER, -1, prev)))
-	{
-		headers.push_back({ h->name, h->value });
-		prev = h;
-	}
-	return headers;
-}
-
-
 ContentType HTTPclass::GetHTTPContentType(CURL* curl)
 {
 	curl_header* header = nullptr;
@@ -428,22 +417,6 @@ static int CurlProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dl
 	if (panel->dldShouldCancel)
 		return 1;  // non-zero aborts transfer
 	return 0; // continue
-}
-
-
-template<typename InputType>
-static bool isValidJSON(InputType&& i)
-{
-	try
-	{
-		auto j = nlohmann::json::parse(i);
-		return true;
-	}
-	catch (const nlohmann::json::parse_error& e)
-	{
-		// parsing failed, invalid JSON
-		return false;
-	}
 }
 
 
@@ -528,6 +501,58 @@ void HTTPclass::DisplayInfo(const std::string& buffer)
 }
 
 
+static inline bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected = true)
+{
+	EditorGetString egs = { .StructSize = sizeof(EditorGetString), .StringNumber = -1 };
+	PsInfo.EditorControl(editorId, ECTL_GETSTRING, NULL, &egs);
+
+	if (!egs.StringText)
+		return false;
+
+	bool alreadySelected = egs.SelStart != -1;
+	if (alreadySelected && skipIfSelected)
+		return false;
+
+	EditorInfo editorInfo = { sizeof(EditorInfo) };
+	PsInfo.EditorControl(editorId, ECTL_GETINFO, {}, &editorInfo);
+
+	intptr_t start = editorInfo.CurPos, end = editorInfo.CurPos;
+
+	if (iswalnum(egs.StringText[end]))
+	{
+		while (start > 0 && iswalnum(egs.StringText[start - 1]))
+			--start;
+
+		while (end < egs.StringLength - 1 && iswalnum(egs.StringText[end + 1]))
+			++end;
+	}
+
+	EditorSetPosition esp = {
+		.StructSize = sizeof(EditorSetPosition),
+		.CurLine = -1,
+		.CurPos = end + 1,
+		.CurTabPos = -1,
+		.TopScreenLine = -1,
+		.LeftPos = -1,
+		.Overtype = -1,
+	};
+
+	EditorSelect editorSelect = {
+		.StructSize = sizeof(EditorSelect),
+		.BlockType = BTYPE_STREAM,
+		.BlockStartLine = editorInfo.CurLine,
+		.BlockStartPos = start,
+		.BlockWidth = end - start + 1,
+		.BlockHeight = 1,
+	};
+	PsInfo.EditorControl(editorId, ECTL_SELECT, {}, &editorSelect);
+	PsInfo.EditorControl(editorId, ECTL_SETPOSITION, {}, &esp);
+	PsInfo.EditorControl(editorId, ECTL_REDRAW, {}, {});
+
+	return true;
+}
+
+
 int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 {
 	if (editorIds.find(currentlyOpenEditorId) == editorIds.end())
@@ -546,6 +571,17 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
 		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed);
 
+	if (Key == VK_ESCAPE)
+	{
+		if (dldInProgress)  // prevent editor from closing if arguments were forwarded
+		{
+			if (!dldShouldCancel)
+				FireCancelDialog();
+
+			return TRUE;
+		}
+	}
+
 	if (NonePressed && Key == VK_F5)
 	{
 		// show response headers
@@ -555,56 +591,26 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 
 	if (OnlyAnyShiftPressed && (Key == VK_F3 || Key == VK_RETURN))
 	{
-		EditorGetString egs = {
-			.StructSize = sizeof(EditorGetString),
-			.StringNumber = -1,
-		};
-		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETSTRING, NULL, &egs);
-
-		if (egs.SelStart != -1)  // already selected
-			return TRUE;
-
-		EditorInfo editorInfo = { sizeof(EditorInfo) };
-		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETINFO, {}, &editorInfo);
-
-		intptr_t start = editorInfo.CurPos, end = editorInfo.CurPos;
-
-		while (start > 0 && iswalnum(egs.StringText[start - 1]))
-			--start;
-
-		if (iswalnum(egs.StringText[end]))
+		if (Rec->Event.KeyEvent.bKeyDown)
 		{
-			while (end < egs.StringLength - 1 && iswalnum(egs.StringText[end + 1]))
-				++end;
+			if (!handledSelectionExpand)
+			{
+				ExpandEditorSelection(currentlyOpenEditorId, false);
+				handledSelectionExpand = true;
+			}
 		}
-
-		EditorSetPosition esp = {
-			.StructSize = sizeof(EditorSetPosition),
-			.CurLine = -1,
-			.CurPos = end + 1,
-			.CurTabPos = -1,
-			.TopScreenLine = -1,
-			.LeftPos = -1,
-			.Overtype = -1,
-		};
-
-		EditorSelect editorSelect = {
-			.StructSize = sizeof(EditorSelect),
-			.BlockType = BTYPE_STREAM,
-			.BlockStartLine = editorInfo.CurLine,
-			.BlockStartPos = start,
-			.BlockWidth = end - start + 1,
-			.BlockHeight = 1,
-		};
-		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_SELECT, {}, &editorSelect);
-		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_SETPOSITION, {}, &esp);
-		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_REDRAW, {}, {});
-
+		else
+		{
+			handledSelectionExpand = false;
+		}
+		
 		return TRUE;
 	}
 
 	if (OnlyAnyShiftPressed && Key == VK_F4)
 	{
+		ExpandEditorSelection(currentlyOpenEditorId);
+
 		HTTPDialogs::OpenSelectionDialogData osdd;
 
 		// retrieve the selected text in order to forward it as the clipboard argument
@@ -722,21 +728,31 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 }
 
 
+static bool HasHTTPPrefix(const wchar_t* str, size_t strSize = -1)
+{
+	static string prefixes[] = { L"http://", L"https://" };
+	for (const string& prefix : prefixes)
+	{
+		if (strSize == -1)
+			strSize = wcsnlen_s(str, 2048);
+
+		size_t sizeToCheck = std::min(strSize, prefix.size());
+		if (wcsncmp(str, prefix.c_str(), sizeToCheck) == 0)
+			return true;
+	}
+	return false;
+}
+
+
 static bool IsHTTPEditor(intptr_t editorId)
 {
 	intptr_t requiredSize = PsInfo.EditorControl(editorId, ECTL_GETTITLE, 0, NULL);
 	string title;
 	title.resize(requiredSize);
 	PsInfo.EditorControl(editorId, ECTL_GETTITLE, requiredSize, title.data());
-	string prefixes[] = { L"http://", L"https://" };
-	for (const string& prefix : prefixes)
-	{
-		size_t sizeToCheck = std::min(title.size(), prefix.size());
-		if (wcsncmp(title.c_str(), prefix.c_str(), sizeToCheck) == 0)
-			return true;
-	}
-	return false;
+	return HasHTTPPrefix(title.c_str(), title.size());
 }
+
 
 std::string HTTPclass::GetInfoBuffer(CURL* curl)
 {
@@ -817,6 +833,7 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 	return FALSE;
 }
 
+
 intptr_t HTTPclass::ProcessViewerEventW(const ProcessViewerEventInfo* Info)
 {
 	switch (Info->Event)
@@ -849,6 +866,29 @@ intptr_t HTTPclass::ProcessViewerEventW(const ProcessViewerEventInfo* Info)
 }
 
 
+void HTTPclass::FireCancelDialog()
+{
+	ResetEvent(dldShouldRun);
+	PsInfo.AdvControl(&MainGuid, ACTL_SETPROGRESSSTATE, TBPS_PAUSED, {});
+	PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MCancelDownload, TEXT("Download_Cancel"), {}, {}, FDLG_WARNING);
+	Builder.AddOKCancel(MYes, MNo);
+	if (Builder.ShowDialog())
+	{
+		dldShouldCancel = true;
+		WaitForSingleObject(downloadsMutex, INFINITE);
+		for (const auto& [curl, dldData] : downloadsInProgress)
+		{
+			curl_multi_remove_handle(curlm, curl);
+			auto dldData = downloadsInProgress[curl];
+			SetEvent(dldData->completed);
+		}
+		ReleaseMutex(downloadsMutex);
+		curl_multi_wakeup(curlm);
+	}
+	SetEvent(dldShouldRun);  // allow the download thread to continue
+}
+
+
 int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 {
 	if (Rec->EventType == MOUSE_EVENT)  // NOTE: mouse does not get passed through yet (https://api.farmanager.com/ru/exported_functions/processpanelinputw.html)
@@ -873,23 +913,7 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		if (dldShouldCancel)
 			return FALSE;
 
-		ResetEvent(dldShouldRun);
-		PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MCancelDownload, TEXT("Download_Cancel"), {}, {}, FDLG_WARNING);
-		Builder.AddOKCancel(MYes, MNo);
-		if (Builder.ShowDialog())
-		{
-			dldShouldCancel = true;
-			WaitForSingleObject(downloadsMutex, INFINITE);
-			for (const auto& [curl, dldData] : downloadsInProgress)
-			{
-				curl_multi_remove_handle(curlm, curl);
-				auto dldData = downloadsInProgress[curl];
-				SetEvent(dldData->completed);
-			}
-			ReleaseMutex(downloadsMutex);
-			curl_multi_wakeup(curlm);
-		}
-		SetEvent(dldShouldRun);  // allow the download thread to continue
+		FireCancelDialog();
 
 		return TRUE;
 	}
@@ -1104,6 +1128,8 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 				if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
 					BasicErrorMessage({ L"Error", L"Error writing to template file", filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
 				CloseHandle(templateFile);
+
+				SendSynchroAction(std::make_unique<SynchroAction>(SynchroActionType::UPDATE_PANEL));
 			}
 		}
 
@@ -1219,7 +1245,6 @@ void HTTPclass::WaitDownloads()
 {
 	dldShouldCancel = false;
 	dldInProgress = true;
-	SCOPE_EXIT{ dldInProgress = false; };
 	SetEvent(dldShouldRun);
 
 	std::deque<std::pair<CURL*, std::shared_ptr<DldData>>> currentlyCompletedDownloads;
@@ -1249,8 +1274,36 @@ void HTTPclass::WaitDownloads()
 		}
 	}
 
+	dldInProgress = false;
+	PsInfo.AdvControl(&MainGuid, ACTL_PROGRESSNOTIFY, {}, {});
+	PsInfo.AdvControl(&MainGuid, ACTL_SETPROGRESSSTATE, TBPS_NOPROGRESS, {});
+
 	for (auto& [curl, dldData] : currentlyCompletedDownloads)
 		ProcessResponse(curl, *dldData);
+}
+
+
+intptr_t HTTPclass::ProcessPanelEventW(const ProcessPanelEventInfo* Info)
+{
+	switch (Info->Event)
+	{
+	case FE_COMMAND:
+		{
+			const wchar_t* url = static_cast<const wchar_t*>(Info->Param);
+			if (!HasHTTPPrefix(url))
+				return FALSE;
+
+			HTTPTemplate httpTemplate { .verb = HTTPVerb::GET, .url = url };
+
+			curlProgressArguments.clear();
+			ScheduleDownload(httpTemplate, true);
+			WaitDownloadsWrapper();
+			PsInfo.PanelControl(this, FCTL_SETCMDLINE, {}, (void*)L"");
+			return TRUE;
+		}
+		break;
+	}
+	return FALSE;
 }
 
 
@@ -1302,6 +1355,11 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 					string sizeFormatted = std::format(TEXT("Downloaded {} / {} bytes [{:.2f}%]"), dlnow, dltotal, 100 * (float)dlnow / (float)dltotal);
 					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str(), sizeFormatted.c_str() };
 					PsInfo.Message(&MainGuid, &ProgressMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
+
+					ProgressValue pv = { sizeof(ProgressValue) };
+					pv.Completed = dlnow;
+					pv.Total = dltotal;
+					PsInfo.AdvControl(&MainGuid, ACTL_SETPROGRESSVALUE, 0, &pv);
 				}
 			}
 			else
@@ -1543,7 +1601,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			// open response buffer in viewer/editor
 			if (dldData.edit)
 			{
-				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN, 1, 1, CP_DEFAULT);
+				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN | EF_LOCKED, 1, 1, CP_DEFAULT);
 				EditorInfo editorInfo = { sizeof(EditorInfo) };
 				PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, {}, &editorInfo);
 				editorIds.insert(editorInfo.EditorID);

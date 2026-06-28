@@ -70,6 +70,7 @@ public:
 	std::string GetInfoBuffer(CURL* curl);
 	void DisplayInfo(const std::string& buffer);
 	int ProcessEditorKey(const INPUT_RECORD* Rec);
+	intptr_t ProcessPanelEventW(const ProcessPanelEventInfo* Info);
 	intptr_t ProcessSynchroEventW(SynchroAction* event);
 	intptr_t ProcessEditorEventW(const ProcessEditorEventInfo* Info);
 	intptr_t ProcessViewerEventW(const ProcessViewerEventInfo* Info);
@@ -90,9 +91,6 @@ private:
 	bool LoadTemplateItems();
 	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
 
-	// returns a vector of pairs of all the headers
-	// useful for displaying but computationally expensive
-	std::vector<std::pair<std::string, std::string>> GetAllHeaders(CURL* curl);
 	// obtains the value for the content-type header
 	// a call to ObtainHttpHeaders needs to be made before calling this function
 	ContentType GetHTTPContentType(CURL* curl);
@@ -104,6 +102,7 @@ private:
 	bool ProcessResponse(CURL* curl, DldData& dldData);
 	bool PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipboardError, bool skipClipboard = false);
 	void CleanupDownload(CURL* curl, const DldData& dldData);
+	void FireCancelDialog();
 
 public:
 	std::unordered_map<CURL*, std::shared_ptr<DldData>> downloadsInProgress;
@@ -122,6 +121,7 @@ private:
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
+	bool handledSelectionExpand = false;
 
 	// editor state
 	std::unordered_set<intptr_t> editorIds;

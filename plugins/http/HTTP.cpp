@@ -44,6 +44,11 @@ intptr_t WINAPI ProcessPanelInputW(const ProcessPanelInputInfo* Info)
 	return static_cast<HTTPclass*>(Info->hPanel)->ProcessKey(&Info->Rec);
 }
 
+intptr_t WINAPI ProcessPanelEventW(const ProcessPanelEventInfo* Info)
+{
+	return static_cast<HTTPclass*>(Info->hPanel)->ProcessPanelEventW(Info);
+}
+
 intptr_t WINAPI PutFilesW(const PutFilesInfo* Info)
 {
 	return static_cast<HTTPclass*>(Info->hPanel)->PutFiles({ Info->PanelItem, Info->ItemsNumber }, Info->SrcPath, Info->OpMode);
@@ -60,7 +65,6 @@ intptr_t WINAPI ProcessSynchroEventW(const ProcessSynchroEventInfo* Info)
 	HTTPclass* panel = static_cast<HTTPclass*>(PanelHandle);
 	return panel->ProcessSynchroEventW(action);
 }
-
 
 intptr_t WINAPI ProcessEditorInputW(const ProcessEditorInputInfo* Info)
 {

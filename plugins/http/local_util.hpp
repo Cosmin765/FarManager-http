@@ -1,6 +1,7 @@
 ﻿#ifndef LOCAL_UTIL_HPP
 #define LOCAL_UTIL_HPP
 #include "headers.hpp"
+#include "structs.hpp"
 
 extern PluginStartupInfo PsInfo;
 
@@ -106,5 +107,34 @@ constexpr auto check_control(unsigned const ControlState, unsigned const Mask)
 
 	return ((FilteredControlState & Mask) || !Mask) && !(FilteredControlState & OtherKeys);
 };
+
+template<typename InputType>
+bool isValidJSON(InputType&& i)
+{
+	try
+	{
+		auto j = nlohmann::json::parse(i);
+		return true;
+	}
+	catch (const nlohmann::json::parse_error& e)
+	{
+		// parsing failed, invalid JSON
+		return false;
+	}
+}
+
+
+static std::vector<std::pair<std::string, std::string>> GetAllHeaders(CURL* curl)
+{
+	curl_header* prev = nullptr;
+	curl_header* h;
+	std::vector<std::pair<std::string, std::string>> headers;
+	while ((h = curl_easy_nextheader(curl, CURLH_HEADER, -1, prev)))
+	{
+		headers.push_back({ h->name, h->value });
+		prev = h;
+	}
+	return headers;
+}
 
 #endif // LOCAL_UTIL_HPP

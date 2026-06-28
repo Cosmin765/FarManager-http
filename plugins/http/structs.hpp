@@ -1,4 +1,7 @@
-﻿#include <stdint.h>
+﻿#ifndef STRUCTS_HPP
+#define STRUCTS_HPP
+
+#include <stdint.h>
 
 #include <list>
 #include <string>
@@ -260,3 +263,5 @@ static bool test_HTTPTemplateSerializer()
 	other.Deserialize(buffer);
 	return t == other;
 }
+
+#endif // STRUCTS_HPP
