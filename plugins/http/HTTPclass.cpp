@@ -1,6 +1,7 @@
 ﻿#include "HTTP.hpp"
 
 PluginStartupInfo PsInfo;
+FarStandardFunctions FSF;
 
 
 HTTPclass::HTTPclass() {
@@ -342,7 +343,11 @@ void HTTPclass::CurlPerformDaemon()
 
 		// show progress
 		if (!dldShouldCancel)
-			SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
+		{
+			// send event at most once every 100ms
+			if (dlEvents.size() == 0 || (PsInfo.FSF->FarClock() - dlEvents.back().first) > 100000)
+				SendSynchroAction(SynchroActionType::SHOW_PROGRESS);
+		}
 
 		if (runningHandles != lastRunningHandles)
 		{
@@ -1340,6 +1345,31 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 			if (WaitForSingleObject(dldShouldRun, 0) != WAIT_OBJECT_0)
 				break;  // discard the event
 
+			auto microseconds = PsInfo.FSF->FarClock();
+
+			unsigned __int64 dlNowCum = 0;
+			for (const auto& [curl, dldData] : downloadsInProgress)
+				dlNowCum += dldData->dlnow;
+
+			while (dlEvents.size() > 0 && microseconds - dlEvents.front().first > 1000000)
+				dlEvents.erase(dlEvents.begin());
+
+			dlEvents.push_back({ microseconds, dlNowCum });
+
+			unsigned __int64 dlSpeed = dlEvents.back().second;
+			if (dlEvents.size() >= 2)
+				dlSpeed = dlEvents.back().second - dlEvents.front().second;
+
+			string dlSpeedMsg;
+			if (dlSpeed < (1 << 10))
+				dlSpeedMsg = std::format(L"Speed {} b/s", dlSpeed);
+			else if (dlSpeed < (1 << 20))
+				dlSpeedMsg = std::format(L"Speed {:.2f} Kb/s", (float)dlSpeed / (1 << 10));
+			else if (dlSpeed < (1 << 30))
+				dlSpeedMsg = std::format(L"Speed {:.2f} Mb/s", (float)dlSpeed / (1 << 20));
+			else
+				dlSpeedMsg = std::format(L"Speed {:.2f} Gb/s", (float)dlSpeed / (1 << 30));
+
 			if (downloadsInProgress.size() == 1)
 			{
 				auto currentDld = downloadsInProgress.begin()->second;
@@ -1347,13 +1377,23 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 				const auto& dltotal = currentDld->dltotal;
 				if (dltotal == 0)
 				{
-					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str() };
+					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str(), dlSpeedMsg.c_str() };
 					PsInfo.Message(&MainGuid, &DldInfoMsg, 0, TEXT("DldInfo"), MsgItems, std::size(MsgItems), 0);
 				}
 				else
 				{
-					string sizeFormatted = std::format(TEXT("Downloaded {} / {} bytes [{:.2f}%]"), dlnow, dltotal, 100 * (float)dlnow / (float)dltotal);
-					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str(), sizeFormatted.c_str() };
+					float percent = 100 * (float)dlnow / (float)dltotal;
+					string sizeFormatted;
+					if (dltotal < (1 << 10))
+						sizeFormatted = std::format(TEXT("Downloaded {} / {} bytes [{:.2f}%]"), dlnow, dltotal, percent);
+					else if (dltotal < (1 << 20))
+						sizeFormatted = std::format(TEXT("Downloaded {:.2f} / {:.2f} Kb [{:.2f}%]"), (float)dlnow / (1 << 10), (float)dltotal / (1 << 10), percent);
+					else if (dltotal < (1 << 30))
+						sizeFormatted = std::format(TEXT("Downloaded {:.2f} / {:.2f} Mb [{:.2f}%]"), (float)dlnow / (1 << 20), (float)dltotal / (1 << 20), percent);
+					else
+						sizeFormatted = std::format(TEXT("Downloaded {:.2f} / {:.2f} Gb [{:.2f}%]"), (float)dlnow / (1 << 30), (float)dltotal / (1 << 30), percent);
+
+					const wchar_t* MsgItems[]{ TEXT("Reading from URL"), currentDld->wideUrl.c_str(), sizeFormatted.c_str(), dlSpeedMsg.c_str() };
 					PsInfo.Message(&MainGuid, &ProgressMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
 
 					ProgressValue pv = { sizeof(ProgressValue) };
@@ -1367,7 +1407,7 @@ intptr_t HTTPclass::ProcessSynchroEventW(SynchroAction* action)
 				// display downloads count
 				string msg = std::format(L"Executing in parallel {} requests", downloadsInProgress.size());
 
-				const wchar_t* MsgItems[]{ TEXT("Executing "), msg.c_str() };
+				const wchar_t* MsgItems[]{ TEXT("Executing "), msg.c_str(), dlSpeedMsg.c_str() };
 				PsInfo.Message(&MainGuid, &DldInfoMsg, 0, TEXT("DldProgress"), MsgItems, std::size(MsgItems), 0);
 			}
 		} break;

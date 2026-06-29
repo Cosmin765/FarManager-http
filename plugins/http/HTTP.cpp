@@ -16,6 +16,8 @@ void WINAPI GetGlobalInfoW(struct GlobalInfo *GInfo)
 void WINAPI SetStartupInfoW(const struct PluginStartupInfo *psi)
 {
 	PsInfo = *psi;
+	FSF = *PsInfo.FSF;
+	PsInfo.FSF = &FSF;
 }
 
 void WINAPI GetPluginInfoW(struct PluginInfo *PInfo)

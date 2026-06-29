@@ -135,6 +135,9 @@ private:
 	std::unordered_map<intptr_t, std::string> viewerInfoBuffers;
 	std::unordered_map<intptr_t, PanelDldData> viewerData;
 
+	// progress state
+	std::deque<std::pair<unsigned __int64, unsigned __int64>> dlEvents;
+
 	static constexpr wchar_t EXTENSION[] = L".htmpl";
 	static constexpr size_t EXTENSION_LENGTH = std::size(EXTENSION) - 1;
 };

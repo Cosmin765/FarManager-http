@@ -4,6 +4,7 @@
 #include "structs.hpp"
 
 extern PluginStartupInfo PsInfo;
+extern FarStandardFunctions FSF;
 
 inline const wchar_t* GetMsg(int MsgId)
 {
