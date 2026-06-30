@@ -107,27 +107,27 @@ bool HTTPclass::EnsureTemplatesPath()
 	if (checked)
 		return true;
 	PluginSettings settings(MainGuid, PsInfo.SettingsControl);
-	const wchar_t* templatesPath = settings.Get(0, L"TemplatesPath", L"");
+	string templatesPath = settings.Get(0, L"TemplatesPath", L"");
 
-	if (!templatesPath || templatesPath[0] == L'\0')
+	if (templatesPath.size() == 0)
 	{
 		// initialise the path
-		wchar_t templatesPath[MAX_PATH] = L"C:\\FarManager-HTTP";
+		wchar_t templatesPathArr[MAX_PATH] = L"C:\\FarManager-HTTP";
 		const wchar_t* boxTitle = L"Templates Path";
 		const wchar_t* boxSubTitle = L"Where will HTTP templates be stored?";
 
 		for (;;)
 		{
-			PsInfo.InputBox(&MainGuid, &InputBoxGuid, boxTitle, boxSubTitle, boxTitle, templatesPath, templatesPath, MAX_PATH, {}, FIB_BUTTONS);
+			PsInfo.InputBox(&MainGuid, &InputBoxGuid, boxTitle, boxSubTitle, boxTitle, templatesPathArr, templatesPathArr, MAX_PATH, {}, FIB_BUTTONS);
 
 			std::error_code ec;
-			if (std::filesystem::exists(templatesPath, ec) && !ec)
+			if (std::filesystem::exists(templatesPathArr, ec) && !ec)
 				break;
 
-			if (std::filesystem::create_directories(templatesPath, ec) && !ec)
+			if (std::filesystem::create_directories(templatesPathArr, ec) && !ec)
 				break;
 
-			intptr_t btn = BasicErrorMessage({ L"Error", L"Could not create templates directory", templatesPath, L"\x01", L"&Retry", L"&Ok"}, 2);
+			intptr_t btn = BasicErrorMessage({ L"Error", L"Could not create templates directory", templatesPathArr, L"\x01", L"&Retry", L"&Ok"}, 2);
 			if (btn == 0)  // retry
 				continue;
 			else
@@ -137,7 +137,8 @@ bool HTTPclass::EnsureTemplatesPath()
 			}
 		}
 
-		settings.Set(0, L"TemplatesPath", templatesPath);
+		settings.Set(0, L"TemplatesPath", templatesPathArr);
+		templatesPath = templatesPathArr;
 	}
 
 	string downloadsPath = settings.Get(0, L"DownloadsPath", L"");
