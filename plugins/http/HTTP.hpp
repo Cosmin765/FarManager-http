@@ -101,7 +101,7 @@ private:
 	void WaitDownloads();
 	bool ProcessResponse(CURL* curl, DldData& dldData);
 	bool PrepareTemplateArguments(HTTPTemplate& httpTemplate, bool& clipboardError, bool skipClipboard = false);
-	void CleanupDownload(CURL* curl, const DldData& dldData);
+	void CleanupDownload(CURL* curl, const DldData& dldData, bool removeFile = true);
 	void FireCancelDialog();
 
 public:
@@ -121,7 +121,6 @@ private:
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
-	bool handledSelectionExpand = false;
 
 	// editor state
 	std::unordered_set<intptr_t> editorIds;

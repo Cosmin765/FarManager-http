@@ -167,22 +167,29 @@ namespace HTTPDialogs
 		IN OUT OpenSelectionDialogData& data
 	)
 	{
-		this->AddText(TEXT("&Selection"));
+		string selectionHeader = std::format(TEXT("&Selection [length {}]"), data.selectedText.size());
+		this->AddText(selectionHeader.c_str());
 		this->AddEditField(data.selectedText, 100, TEXT("Selected_Text"), false);
 
 		this->AddSeparator(TEXT("Templates"));
 
-		size_t index = 1;
+		std::unordered_set<wchar_t> seenLetters;
+
 		for (const auto& [filename, selected] : std::views::zip(data.httpTemplateFilenames, data.selectedIndices))
 		{
 			size_t slashPos = filename.rfind(L"\\");
 			if (slashPos != string::npos)
 				filename = filename.substr(slashPos + 1);
 
-			if (index > 0)
+			for (size_t i = 0; i < filename.size(); ++i)
 			{
-				filename = std::format(TEXT("&{}. {}"), index, filename);
-				index = (index + 1) % 10;
+				auto c = filename[i];
+				if (seenLetters.find(c) == seenLetters.end())
+				{
+					filename.replace(i, 1, concat(L"&", c));
+					seenLetters.insert(c);
+					break;
+				}
 			}
 
 			this->AddCheckbox(filename.c_str() + filename.rfind(L"\\") + 1, &selected);

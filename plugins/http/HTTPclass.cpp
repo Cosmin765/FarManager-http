@@ -503,11 +503,11 @@ void HTTPclass::DisplayInfo(const std::string& buffer)
 		}
 	}
 
-	PsInfo.Editor(headersFilepath, headersFilepath, 0, 0, -1, -1, EF_DELETEONLYFILEONCLOSE, 1, 1, CP_DEFAULT);
+	PsInfo.Editor(headersFilepath, headersFilepath, 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN | EF_LOCKED, 1, 1, CP_DEFAULT);
 }
 
 
-static inline bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected = true)
+static bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected = true)
 {
 	EditorGetString egs = { .StructSize = sizeof(EditorGetString), .StringNumber = -1 };
 	PsInfo.EditorControl(editorId, ECTL_GETSTRING, NULL, &egs);
@@ -522,20 +522,45 @@ static inline bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected 
 	EditorInfo editorInfo = { sizeof(EditorInfo) };
 	PsInfo.EditorControl(editorId, ECTL_GETINFO, {}, &editorInfo);
 
-	intptr_t start = editorInfo.CurPos, end = editorInfo.CurPos;
+	intptr_t start = editorInfo.CurPos;
 
-	if (iswalnum(egs.StringText[end]))
+	auto skip_whitespace = [&](intptr_t _start)
+		{
+			while (_start < egs.StringLength && iswspace(egs.StringText[_start]))
+				++_start;
+			return _start;
+		};
+
+	start = skip_whitespace(start);
+
+	intptr_t CurLine = editorInfo.CurLine;
+
+	if (editorInfo.CurPos >= egs.StringLength)
 	{
-		while (start > 0 && iswalnum(egs.StringText[start - 1]))
+		start = 0;
+		++CurLine;
+
+		egs.StringNumber = CurLine;
+		PsInfo.EditorControl(editorId, ECTL_GETSTRING, NULL, &egs);
+		start = skip_whitespace(start);
+	}
+
+	intptr_t end = start;
+
+	auto valid_char = [](wchar_t c) { return iswalnum(c) || c == L'_'; };
+
+	if (valid_char(egs.StringText[start]))
+	{
+		while (start > 0 && valid_char(egs.StringText[start - 1]))
 			--start;
 
-		while (end < egs.StringLength - 1 && iswalnum(egs.StringText[end + 1]))
+		while (end < egs.StringLength - 1 && valid_char(egs.StringText[end + 1]))
 			++end;
 	}
 
 	EditorSetPosition esp = {
 		.StructSize = sizeof(EditorSetPosition),
-		.CurLine = -1,
+		.CurLine = CurLine,
 		.CurPos = end + 1,
 		.CurTabPos = -1,
 		.TopScreenLine = -1,
@@ -546,7 +571,7 @@ static inline bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected 
 	EditorSelect editorSelect = {
 		.StructSize = sizeof(EditorSelect),
 		.BlockType = BTYPE_STREAM,
-		.BlockStartLine = editorInfo.CurLine,
+		.BlockStartLine = CurLine,
 		.BlockStartPos = start,
 		.BlockWidth = end - start + 1,
 		.BlockHeight = 1,
@@ -558,14 +583,137 @@ static inline bool ExpandEditorSelection(intptr_t editorId, bool skipIfSelected 
 	return true;
 }
 
+static inline constexpr bool IsHexadecimal(wchar_t c) {
+	bool digit = c >= L'0' && c <= L'9';
+	bool lower = c >= L'a' && c <= L'f';
+	bool upper = c >= L'A' && c <= L'F';
+	return digit || upper || lower;
+};
+
+
+static bool SelectNextHash(intptr_t editorId, bool forward = true)
+{
+	EditorGetString egs = { .StructSize = sizeof(EditorGetString), .StringNumber = -1 };
+	EditorInfo editorInfo = { sizeof(EditorInfo) };
+
+	PsInfo.EditorControl(editorId, ECTL_GETINFO, {}, &editorInfo);
+
+	intptr_t validStart = editorInfo.CurPos, validEnd = editorInfo.CurPos;
+	intptr_t CurLine = editorInfo.CurLine;
+
+	auto found_hash = [&]() { return validEnd - validStart >= 32; };
+
+	do
+	{
+		PsInfo.EditorControl(editorId, ECTL_GETSTRING, NULL, &egs);
+
+		if (!egs.StringText)
+			return false;
+
+		const bool selectionExists = egs.SelStart != -1;
+
+		if (forward)
+		{
+			if (selectionExists)
+				validStart = egs.SelEnd;
+
+			// if cursor is on the hash, move it at the beginning
+			while (validStart > 0 && IsHexadecimal(egs.StringText[validStart]))
+				--validStart;
+			validEnd = validStart;
+
+			while (validEnd < egs.StringLength)
+			{
+				if (IsHexadecimal(egs.StringText[validEnd]))
+				{
+					++validEnd;
+				}
+				else
+				{
+					if (found_hash())
+						break;
+					++validEnd;
+					validStart = validEnd;
+				}
+			}
+
+			if (found_hash())
+				break;
+
+			egs.StringNumber = ++CurLine;
+			validStart = validEnd = 0;
+		}
+		else
+		{
+			if (validEnd == -1)
+				validEnd = egs.StringLength - 1;
+			else if (selectionExists)  // to make sure there is a selection
+				validEnd = egs.SelStart;
+
+			if (IsHexadecimal(egs.StringText[validEnd - 1]))
+			{
+				// if cursor is on the hash, move it at the end
+				while (validEnd < egs.StringLength && IsHexadecimal(egs.StringText[validEnd]))
+					++validEnd;
+			}
+			validStart = validEnd - 1;
+
+			while (validStart > 0)
+			{
+				if (IsHexadecimal(egs.StringText[validStart - 1]))
+				{
+					--validStart;
+				}
+				else
+				{
+					if (found_hash())
+						break;
+					--validStart;
+					validEnd = validStart;
+				}
+			}
+
+			if (found_hash())
+				break;
+
+			egs.StringNumber = --CurLine;
+			validEnd = -1;  // set it to the end of the previous line
+		}
+	}
+	while (CurLine >= 0 && CurLine < editorInfo.TotalLines);
+
+	if (!found_hash())
+		return false;
+
+	EditorSetPosition esp = {
+		.StructSize = sizeof(EditorSetPosition),
+		.CurLine = CurLine,
+		.CurPos = forward ? validEnd : validStart,
+		.CurTabPos = -1,
+		.TopScreenLine = -1,
+		.LeftPos = -1,
+		.Overtype = -1,
+	};
+
+	EditorSelect editorSelect = {
+		.StructSize = sizeof(EditorSelect),
+		.BlockType = BTYPE_STREAM,
+		.BlockStartLine = CurLine,
+		.BlockStartPos = validStart,
+		.BlockWidth = validEnd - validStart,
+		.BlockHeight = 1,
+	};
+
+	PsInfo.EditorControl(editorId, ECTL_SELECT, {}, &editorSelect);
+	PsInfo.EditorControl(editorId, ECTL_SETPOSITION, {}, &esp);
+	PsInfo.EditorControl(editorId, ECTL_REDRAW, {}, {});
+
+	return true;
+}
+
 
 int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 {
-	if (editorIds.find(currentlyOpenEditorId) == editorIds.end())
-	{
-		// not our editor
-		return FALSE;
-	}
 	if (Rec->EventType != KEY_EVENT)
 		return FALSE;
 
@@ -575,7 +723,9 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 	const bool
 		NonePressed = check_control(ControlState, none_pressed),
 		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed),
-		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed);
+		OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed),
+		OnlyAnyCtrlPressed = check_control(ControlState, any_ctrl_pressed),
+		AnyShiftAndAnyCtrlPressed = (ControlState & any_ctrl_pressed) && (ControlState & any_shift_pressed);
 
 	if (Key == VK_ESCAPE)
 	{
@@ -590,6 +740,12 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 
 	if (NonePressed && Key == VK_F5)
 	{
+		if (editorIds.find(currentlyOpenEditorId) == editorIds.end())
+			return FALSE;
+
+		if (editorInfoBuffers.find(currentlyOpenEditorId) == editorInfoBuffers.end())
+			return FALSE;
+
 		// show response headers
 		DisplayInfo(editorInfoBuffers[currentlyOpenEditorId]);
 		return TRUE;
@@ -598,18 +754,18 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 	if (OnlyAnyShiftPressed && (Key == VK_F3 || Key == VK_RETURN))
 	{
 		if (Rec->Event.KeyEvent.bKeyDown)
-		{
-			if (!handledSelectionExpand)
-			{
-				ExpandEditorSelection(currentlyOpenEditorId, false);
-				handledSelectionExpand = true;
-			}
-		}
-		else
-		{
-			handledSelectionExpand = false;
-		}
+			ExpandEditorSelection(currentlyOpenEditorId, false);
 		
+		return TRUE;
+	}
+
+	if ((OnlyAnyCtrlPressed || AnyShiftAndAnyCtrlPressed) && Key == VK_RETURN)
+	{
+		if (Rec->Event.KeyEvent.bKeyDown)
+		{
+			bool forward = OnlyAnyCtrlPressed;
+			SelectNextHash(currentlyOpenEditorId, forward);
+		}
 		return TRUE;
 	}
 
@@ -687,7 +843,8 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 			if (!hasClipboardArg)
 				continue;
 
-			if (editorData[currentlyOpenEditorId].filename == httpTemplate.Filename)
+			auto it = editorData.find(currentlyOpenEditorId);
+			if (it != editorData.end() && it->second.filename == httpTemplate.Filename)
 			{
 				osdd.selectedIndices.push_front(true);
 				httpTemplates.push_front(httpTemplate);
@@ -791,14 +948,14 @@ std::string HTTPclass::GetInfoBuffer(CURL* curl)
 }
 
 
-void HTTPclass::CleanupDownload(CURL* curl, const DldData& dldData)
+void HTTPclass::CleanupDownload(CURL* curl, const DldData& dldData, bool removeFile)
 {
 	if (dldData.tempFileHandle != INVALID_HANDLE_VALUE)
 		CloseHandle(dldData.tempFileHandle);  // release it in case it wasn't
 
 	DWORD dwAttrib = GetFileAttributes(dldData.tempFile);
 	bool isFile = (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
-	if (isFile)
+	if (isFile && removeFile)
 		DeleteFile(dldData.tempFile);
 
 	if (dldData.headers != nullptr)
@@ -815,6 +972,45 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 	case EE_GOTFOCUS:
 		{
 			currentlyOpenEditorId = Info->EditorID;
+
+			KeyBarLabel kbl[3];
+			kbl[0] = {
+				.Key = {
+					.VirtualKeyCode = VK_F5,
+					.ControlKeyState = 0,
+			},
+			.Text = GetMsg(MInfo),
+			.LongText = GetMsg(MInfo),
+			};
+			kbl[1] = {
+				.Key = {
+					.VirtualKeyCode = VK_F4,
+					.ControlKeyState = SHIFT_PRESSED,
+			},
+			.Text = GetMsg(MRequest),
+			.LongText = GetMsg(MRequest),
+			};
+			kbl[2] = {
+				.Key = {
+					.VirtualKeyCode = VK_F3,
+					.ControlKeyState = SHIFT_PRESSED,
+			},
+			.Text = GetMsg(MSelect),
+			.LongText = GetMsg(MSelect),
+			};
+			KeyBarTitles kbt;
+			if (IsHTTPEditor(currentlyOpenEditorId))
+			{
+				kbt = { ARRAYSIZE(kbl), kbl };
+				editorIds.insert(currentlyOpenEditorId);
+			}
+			else
+			{
+				// don't set F5 if not http editor
+				kbt = KeyBarTitles{ ARRAYSIZE(kbl) - 1, kbl + 1 };
+			}
+			FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
+			PsInfo.EditorControl(currentlyOpenEditorId, ECTL_SETKEYBAR, {}, &barTitles);
 		} break;
 	case EE_CLOSE:
 		{
@@ -823,12 +1019,15 @@ intptr_t HTTPclass::ProcessEditorEventW(const ProcessEditorEventInfo* Info)
 			editorIds.erase(Info->EditorID);
 			editorInfoBuffers.erase(Info->EditorID);
 
-			CURL* curl = editorData[Info->EditorID].curl;
-			const auto& dldData = completedDownloads[curl];
+			if (editorData.find(Info->EditorID) != editorData.end())
+			{
+				CURL* curl = editorData[Info->EditorID].curl;
+				const auto& dldData = completedDownloads[curl];
 
-			CleanupDownload(curl, *dldData);
+				CleanupDownload(curl, *dldData, false);
 			
-			editorData.erase(Info->EditorID);
+				editorData.erase(Info->EditorID);
+			}
 		} break;
 	case EE_KILLFOCUS:
 		{
@@ -855,12 +1054,15 @@ intptr_t HTTPclass::ProcessViewerEventW(const ProcessViewerEventInfo* Info)
 			viewerIds.erase(Info->ViewerID);
 			viewerInfoBuffers.erase(Info->ViewerID);
 
-			CURL* curl = viewerData[Info->ViewerID].curl;
-			const auto& dldData = completedDownloads[curl];
+			if (viewerData.find(Info->ViewerID) != viewerData.end())
+			{
+				CURL* curl = viewerData[Info->ViewerID].curl;
+				const auto& dldData = completedDownloads[curl];
 
-			CleanupDownload(curl, *dldData);
+				CleanupDownload(curl, *dldData, false);
 
-			viewerData.erase(Info->ViewerID);
+				viewerData.erase(Info->ViewerID);
+			}
 		} break;
 	case VE_KILLFOCUS:
 		{
@@ -959,7 +1161,6 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		PanelInfo panelInfo = { sizeof(PanelInfo) };
 		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &panelInfo);
 
-		// TODO: multiselect doesn't work
 		for (size_t itemNumber = 0; itemNumber < panelInfo.SelectedItemsNumber; ++itemNumber)
 		{
 			if (const size_t Size = PsInfo.PanelControl(this, FCTL_GETSELECTEDPANELITEM, itemNumber, {}))
@@ -1648,35 +1849,6 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 				editorIds.insert(editorInfo.EditorID);
 				editorInfoBuffers[editorInfo.EditorID] = GetInfoBuffer(curl);
 				editorData[editorInfo.EditorID] = { .filename = dldData.httpTemplate.Filename, .curl = curl };
-
-				KeyBarLabel kbl[3];
-				kbl[0] = {
-					.Key = {
-						.VirtualKeyCode = VK_F5,
-						.ControlKeyState = 0,
-					},
-					.Text = GetMsg(MInfo),
-					.LongText = GetMsg(MInfo),
-				};
-				kbl[1] = {
-					.Key = {
-						.VirtualKeyCode = VK_F4,
-						.ControlKeyState = SHIFT_PRESSED,
-					},
-					.Text = GetMsg(MRequest),
-					.LongText = GetMsg(MRequest),
-				};
-				kbl[2] = {
-					.Key = {
-						.VirtualKeyCode = VK_F3,
-						.ControlKeyState = SHIFT_PRESSED,
-				},
-				.Text = GetMsg(MSelect),
-				.LongText = GetMsg(MSelect),
-				};
-				KeyBarTitles kbt = { ARRAYSIZE(kbl), kbl };
-				FarSetKeyBarTitles barTitles = { sizeof(FarSetKeyBarTitles), &kbt };
-				PsInfo.EditorControl(editorInfo.EditorID, ECTL_SETKEYBAR, {}, &barTitles);
 			}
 			else
 			{
