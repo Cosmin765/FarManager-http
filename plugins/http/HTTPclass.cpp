@@ -800,12 +800,18 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 				continue;
 
 			// extract line selection
-			string StringText = egs.StringText;
+			std::span<const wchar_t> StringBuffer(egs.StringText, egs.StringLength);
 			string LineSelection;
 			if (egs.SelEnd != -1)
-				LineSelection = StringText.substr(egs.SelStart, egs.SelEnd - egs.SelStart);
+			{
+				const auto& selectedStringBuffer = StringBuffer.subspan(egs.SelStart, egs.SelEnd - egs.SelStart);
+				LineSelection = string(selectedStringBuffer.data(), selectedStringBuffer.size());
+			}
 			else
-				LineSelection = StringText.substr(egs.SelStart) + egs.StringEOL;
+			{
+				const auto& selectedStringBuffer = StringBuffer.subspan(egs.SelStart);
+				LineSelection = string(selectedStringBuffer.data(), selectedStringBuffer.size()) + egs.StringEOL;
+			}
 
 			// figure out where to add the line content
 			if (direction == -1)
