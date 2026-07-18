@@ -24,6 +24,7 @@ void WINAPI GetPluginInfoW(struct PluginInfo *PInfo)
 {
 	PInfo->StructSize=sizeof(*PInfo);
 	PInfo->Flags=PF_NONE;
+	PInfo->CommandPrefix = L"http";
 	static const wchar_t *PluginMenuStrings[1];
 	PluginMenuStrings[0]=GetMsg(MTitle);
 	PInfo->PluginMenu.Guids=&MenuGuid;

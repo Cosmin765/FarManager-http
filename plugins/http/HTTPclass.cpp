@@ -53,7 +53,7 @@ HTTPclass::~HTTPclass() {
 void HTTPclass::GetOpenPanelInfo(OpenPanelInfo* Info)
 {
 	Info->StructSize = sizeof(*Info);
-	Info->Flags = OPIF_ADDDOTS | OPIF_SHOWNAMESONLY | OPIF_USEATTRHIGHLIGHTING;
+	Info->Flags = OPIF_SHOWNAMESONLY | OPIF_USEATTRHIGHLIGHTING;
 	Info->CurDir = L"";
 
 	static std::wstring Title = std::format(L" {} ", GetMsg(MTitle));
