@@ -647,16 +647,16 @@ static bool SelectNextHash(intptr_t editorId, bool forward = true)
 		{
 			if (validEnd == -1)
 				validEnd = egs.StringLength - 1;
-			else if (selectionExists)  // to make sure there is a selection
+			else if (selectionExists)
 				validEnd = egs.SelStart;
 
-			if (IsHexadecimal(egs.StringText[validEnd - 1]))
+			if (validEnd > 0)
 			{
 				// if cursor is on the hash, move it at the end
 				while (validEnd < egs.StringLength && IsHexadecimal(egs.StringText[validEnd]))
 					++validEnd;
 			}
-			validStart = validEnd - 1;
+			validStart = validEnd;
 
 			while (validStart > 0)
 			{
