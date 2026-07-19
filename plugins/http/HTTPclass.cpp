@@ -1502,11 +1502,16 @@ intptr_t HTTPclass::ProcessPanelEventW(const ProcessPanelEventInfo* Info)
 	{
 	case FE_COMMAND:
 		{
-			const wchar_t* url = static_cast<const wchar_t*>(Info->Param);
-			if (!HasHTTPPrefix(url))
+			string url = static_cast<const wchar_t*>(Info->Param);
+			wchar_t* url_p = url.data();
+
+			url_p = FSF.LTrim(url_p);
+			url_p = FSF.RTrim(url_p);
+			
+			if (!HasHTTPPrefix(url_p))
 				return FALSE;
 
-			HTTPTemplate httpTemplate { .verb = HTTPVerb::GET, .url = url };
+			HTTPTemplate httpTemplate { .verb = HTTPVerb::GET, .url = url_p };
 
 			curlProgressArguments.clear();
 			ScheduleDownload(httpTemplate, true);
