@@ -650,7 +650,7 @@ static bool SelectNextHash(intptr_t editorId, bool forward = true)
 			else if (selectionExists)
 				validEnd = egs.SelStart;
 
-			if (validEnd > 0)
+			if (validEnd > 0 && IsHexadecimal(egs.StringText[validEnd - 1]))
 			{
 				// if cursor is on the hash, move it at the end
 				while (validEnd < egs.StringLength && IsHexadecimal(egs.StringText[validEnd]))
