@@ -1810,8 +1810,11 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 	{
 		if (curlCode != CURLE_ABORTED_BY_CALLBACK && !dldShouldCancel)
 		{
-			string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
-			BasicErrorMessage({ L"HTTP error", dldData.wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok" });
+			SendSynchroAction(SynchroFunctionAction([=](void*)
+				{
+					string errorMessage = MultiByteToWideChar(curl_easy_strerror(curlCode));
+					BasicErrorMessage({ L"HTTP error", dldData.wideUrl.c_str(), errorMessage.c_str(), L"\x01", L"&Ok" });
+				})); // execute sync
 		}
 		CleanupDownload(curl, dldData);
 		return false;
