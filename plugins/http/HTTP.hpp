@@ -88,6 +88,7 @@ private:
 	bool IsValidTemplate(const PluginPanelItem& item, bool verbose);
 	bool IsValidTemplateExtension(const wchar_t* templateName);
 	bool DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplate& httpTemplate, bool verbose = true);
+	bool SerializeTemplateToFile(const wchar_t* filename, const HTTPTemplate& httpTemplate, bool verbose = true);
 	bool LoadTemplateItems();
 	bool PutOneFile(const string& srcPath, const PluginPanelItem& panelItem);
 
@@ -110,6 +111,7 @@ public:
 	HANDLE downloadsMutex = CreateMutex({}, FALSE, {});
 	std::atomic<bool> dldShouldCancel = false;
 	std::atomic<bool> dldInProgress = false;
+	std::atomic<bool> processingResponse = false;
 	std::atomic<HANDLE> dldShouldRun = CreateEvent({}, TRUE, FALSE, {});
 	std::vector<std::unique_ptr<CurlProgressArgument>> curlProgressArguments;
 

@@ -200,6 +200,9 @@ bool HTTPclass::IsValidTemplate(const PluginPanelItem& item, bool vebose = false
 	if (!DeserializeTemplateFromFile(fileName, tmpl, vebose))
 		return false;
 
+	if (tmpl.needsConverting)
+		SerializeTemplateToFile(fileName, tmpl, false);
+
 	return true;
 }
 
@@ -466,6 +469,36 @@ bool HTTPclass::DeserializeTemplateFromFile(const wchar_t* filename, HTTPTemplat
 	}
 	httpTemplate.Filename = Filename;
 	return true;
+}
+
+
+bool HTTPclass::SerializeTemplateToFile(const wchar_t* filename, const HTTPTemplate& httpTemplate, bool verbose)
+{
+	string Filename = filename;
+	if (!IsValidTemplateExtension(Filename.c_str()))
+		Filename = concat(Filename, EXTENSION);
+
+	std::vector<uint8_t> templateBuffer;
+	httpTemplate.Serialize(templateBuffer);
+
+	HANDLE templateFile = CreateFile(Filename.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (templateFile == INVALID_HANDLE_VALUE)
+	{
+		if (verbose)
+			BasicErrorMessage({ L"Error", L"Error creating template file", Filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok" });
+		return false;
+	}
+	else
+	{
+		if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
+		{
+			if (verbose)
+				BasicErrorMessage({ L"Error", L"Error writing to template file", Filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok" });
+			return false;
+		}
+		CloseHandle(templateFile);
+		return true;
+	}
 }
 
 
@@ -1127,6 +1160,9 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 		if (dldShouldCancel)
 			return FALSE;
 
+		if (processingResponse)
+			return FALSE;
+
 		FireCancelDialog();
 
 		return TRUE;
@@ -1327,23 +1363,9 @@ int HTTPclass::ProcessKey(const INPUT_RECORD* Rec)
 			PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 			string templatesPath = settings.Get(0, L"TemplatesPath", L"");
 			string filename = concat(templatesPath, templatesPath.back() == L'\\'? L"" : L"\\", templateDlgData.filename);
-			if (!IsValidTemplateExtension(filename.c_str()))
-				filename = concat(filename, EXTENSION);
 
-			std::vector<uint8_t> templateBuffer;
-			httpTemplate.Serialize(templateBuffer);
-
-			HANDLE templateFile = CreateFile(filename.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-			if (templateFile == INVALID_HANDLE_VALUE)
-				BasicErrorMessage({ L"Error", L"Error creating template file", filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
-			else
-			{
-				if (!WriteFile(templateFile, templateBuffer.data(), (DWORD)templateBuffer.size(), NULL, NULL))
-					BasicErrorMessage({ L"Error", L"Error writing to template file", filename.c_str(), LastWinAPIError().get(), L"\x01", L"&Ok"});
-				CloseHandle(templateFile);
-
+			if (SerializeTemplateToFile(filename.c_str(), httpTemplate))
 				SendSynchroAction(std::make_unique<SynchroAction>(SynchroActionType::UPDATE_PANEL));
-			}
 		}
 
 		return TRUE;
@@ -1487,12 +1509,15 @@ void HTTPclass::WaitDownloads()
 		}
 	}
 
-	dldInProgress = false;
 	PsInfo.AdvControl(&MainGuid, ACTL_PROGRESSNOTIFY, {}, {});
 	PsInfo.AdvControl(&MainGuid, ACTL_SETPROGRESSSTATE, TBPS_NOPROGRESS, {});
 
+	processingResponse = true;
 	for (auto& [curl, dldData] : currentlyCompletedDownloads)
 		ProcessResponse(curl, *dldData);
+	processingResponse = false;
+
+	dldInProgress = false;
 }
 
 
@@ -1711,6 +1736,8 @@ bool HTTPclass::ScheduleDownload(HTTPTemplate& httpTemplate, bool edit)
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, dldData.tempFileHandle);
 	curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlProgressCallback);
+
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, dldData.httpTemplate.skipVerifySSL ? 0L : 1L);
 	curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
 	auto& progressArg = curlProgressArguments.emplace_back(std::make_unique<CurlProgressArgument>());
@@ -1851,10 +1878,14 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 
 	SendSynchroAction(SynchroFunctionAction([&](void*)
 		{
+			string panelTitle = dldData.wideUrl.c_str();
+			if (dldData.httpTemplate.skipVerifySSL)
+				panelTitle = TEXT("[INSECURE] ") + panelTitle;
+
 			// open response buffer in viewer/editor
 			if (dldData.edit)
 			{
-				PsInfo.Editor(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN | EF_LOCKED, 1, 1, CP_DEFAULT);
+				PsInfo.Editor(dldData.tempFile, panelTitle.c_str(), 0, 0, -1, -1, EF_NONMODAL | EF_ENABLE_F6 | EF_DELETEONLYFILEONCLOSE | EF_IMMEDIATERETURN | EF_LOCKED, 1, 1, CP_DEFAULT);
 				EditorInfo editorInfo = { sizeof(EditorInfo) };
 				PsInfo.EditorControl(CURRENT_EDITOR, ECTL_GETINFO, {}, &editorInfo);
 				editorIds.insert(editorInfo.EditorID);
@@ -1863,7 +1894,7 @@ bool HTTPclass::ProcessResponse(CURL* curl, DldData& dldData)
 			}
 			else
 			{
-				PsInfo.Viewer(dldData.tempFile, dldData.wideUrl.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_ENABLE_F6 | VF_DELETEONLYFILEONCLOSE | VF_IMMEDIATERETURN, CP_DEFAULT);
+				PsInfo.Viewer(dldData.tempFile, panelTitle.c_str(), 0, 0, -1, -1, VF_NONMODAL | VF_ENABLE_F6 | VF_DELETEONLYFILEONCLOSE | VF_IMMEDIATERETURN, CP_DEFAULT);
 				ViewerInfo viewerInfo = { sizeof(ViewerInfo) };
 				PsInfo.ViewerControl(-1, VCTL_GETINFO, {}, &viewerInfo);
 				viewerIds.insert(viewerInfo.ViewerID);

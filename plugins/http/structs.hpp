@@ -121,7 +121,9 @@ struct HTTPTemplate
 	string url;
 	std::vector<HTTPArgument> arguments;
 	std::vector<Header> requestHeaders;
+	bool skipVerifySSL = false;
 	string Filename;  // not serialized
+	bool needsConverting = false;
 
 	void Serialize(std::vector<uint8_t>& buffer) const
 	{
@@ -136,6 +138,7 @@ struct HTTPTemplate
 			SerializeString(buffer, name);
 			SerializeString(buffer, value);
 		}
+		SerializeBasicType(buffer, skipVerifySSL);
 	}
 
 	std::span<uint8_t> Deserialize(std::span<uint8_t> buffer)
@@ -154,6 +157,12 @@ struct HTTPTemplate
 			buffer = DeserializeString(buffer, name);
 			buffer = DeserializeString(buffer, value);
 		}
+
+		if (buffer.size() >= sizeof(skipVerifySSL))
+			buffer = DeserializeBasicType(buffer, skipVerifySSL);
+		else
+			needsConverting = true;
+
 		return buffer;
 	}
 

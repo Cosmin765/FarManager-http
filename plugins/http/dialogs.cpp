@@ -83,6 +83,8 @@ namespace HTTPDialogs
 		data.removeSelectedHeaderId = this->GetLastID() - 1;
 		data.removeAllHeadersId = this->GetLastID();
 
+		this->AddCheckbox(TEXT("S&kip verify SSL"), &data.httpTemplate.skipVerifySSL);
+
 		this->AddOKCancel(MOk, MCancel);
 
 		auto result = PluginDialogBuilder::ShowDialogEx();
