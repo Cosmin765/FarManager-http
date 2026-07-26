@@ -123,6 +123,7 @@ private:
 	HANDLE synchroActionExecuted = CreateEvent({}, TRUE, TRUE, {});
 	HANDLE synchroMutex = CreateMutex({}, FALSE, {});
 	HANDLE showingHeaders = CreateEvent({}, TRUE, FALSE, {});
+	HTTPDialogs::OpenSelectionDialogData osdd;
 
 	// editor state
 	std::unordered_set<intptr_t> editorIds;

@@ -806,8 +806,6 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 	{
 		ExpandEditorSelection(currentlyOpenEditorId);
 
-		HTTPDialogs::OpenSelectionDialogData osdd;
-
 		// retrieve the selected text in order to forward it as the clipboard argument
 		EditorInfo editorInfo = { sizeof(EditorInfo) };
 		PsInfo.EditorControl(currentlyOpenEditorId, ECTL_GETINFO, NULL, &editorInfo);
@@ -817,6 +815,8 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 		std::unordered_map<std::intptr_t, int> lineNumbers = { { CurLine, 0 } };
 
 		EditorGetString egs = { sizeof(EditorGetString) };
+
+		osdd.selectedText.clear();
 
 		while (lineNumbers.size() > 0)
 		{
@@ -861,6 +861,16 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 
 		std::deque<HTTPTemplate> httpTemplates;
 
+		std::unordered_set<string> alreadySelected;
+		for (const auto& [filename, selected] : std::views::zip(osdd.httpTemplateFilenames, osdd.selectedIndices))
+		{
+			if (selected)
+				alreadySelected.insert(filename);
+		}
+
+		osdd.httpTemplateFilenames.clear();
+		osdd.selectedIndices.clear();
+
 		for (const auto& item : pp.Items)
 		{
 			HTTPTemplate httpTemplate;
@@ -883,7 +893,9 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 				continue;
 
 			auto it = editorData.find(currentlyOpenEditorId);
-			if (it != editorData.end() && it->second.filename == httpTemplate.Filename)
+			bool foundInEditorData = it != editorData.end() && it->second.filename == httpTemplate.Filename;
+			bool foundInAlreadySelected = alreadySelected.find(item.FileName) != alreadySelected.end();
+			if (foundInEditorData && alreadySelected.size() == 0 || foundInAlreadySelected)
 			{
 				osdd.selectedIndices.push_front(true);
 				httpTemplates.push_front(httpTemplate);

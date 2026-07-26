@@ -27,6 +27,7 @@ namespace HTTPDialogs
 	{
 		string selectedText;
 		std::deque<string> httpTemplateFilenames;
+		std::deque<string> httpTemplateDisplayFilenames;
 		std::deque<bool> selectedIndices;
 	};
 

@@ -169,32 +169,53 @@ namespace HTTPDialogs
 		IN OUT OpenSelectionDialogData& data
 	)
 	{
-		string selectionHeader = std::format(TEXT("&Selection [length {}]"), data.selectedText.size());
+		string selectionHeader = std::format(TEXT("Selection [length {}]"), data.selectedText.size());
 		this->AddText(selectionHeader.c_str());
 		this->AddEditField(data.selectedText, 100, TEXT("Selected_Text"), false);
 
 		this->AddSeparator(TEXT("Templates"));
 
 		std::unordered_set<wchar_t> seenLetters;
+		data.httpTemplateDisplayFilenames.clear();
 
-		for (const auto& [filename, selected] : std::views::zip(data.httpTemplateFilenames, data.selectedIndices))
+		for (auto& filename : data.httpTemplateFilenames)
 		{
-			size_t slashPos = filename.rfind(L"\\");
-			if (slashPos != string::npos)
-				filename = filename.substr(slashPos + 1);
+			string& displayFilename = data.httpTemplateDisplayFilenames.emplace_back();
+			displayFilename = filename;
 
-			for (size_t i = 0; i < filename.size(); ++i)
+			size_t slashPos = displayFilename.rfind(L"\\");
+			if (slashPos != string::npos)
+				displayFilename = displayFilename.substr(slashPos + 1);
+		}
+
+		std::vector<bool> assignedIndices(data.httpTemplateFilenames.size());
+
+		bool stillRemaining = true;
+		for (size_t i = 0; stillRemaining; ++i)
+		{
+			stillRemaining = false;
+
+			for (size_t j = 0; j < data.httpTemplateFilenames.size(); ++j)
 			{
-				auto c = filename[i];
+				if (assignedIndices[j])
+					continue;
+
+				auto& displayFilename = data.httpTemplateDisplayFilenames[j];
+				bool& selected = data.selectedIndices[j];
+				if (i >= displayFilename.size())
+					continue;
+
+				stillRemaining = true;
+
+				auto c = displayFilename[i];
 				if (seenLetters.find(c) == seenLetters.end())
 				{
-					filename.replace(i, 1, concat(L"&", c));
+					displayFilename.replace(i, 1, concat(L"&", c));
 					seenLetters.insert(c);
-					break;
+					assignedIndices[j] = true;
+					this->AddCheckbox(displayFilename.c_str() + displayFilename.rfind(L"\\") + 1, &selected);
 				}
 			}
-
-			this->AddCheckbox(filename.c_str() + filename.rfind(L"\\") + 1, &selected);
 		}
 
 		this->AddOKCancel(MOk, MCancel);
