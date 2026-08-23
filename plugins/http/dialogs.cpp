@@ -208,7 +208,7 @@ namespace HTTPDialogs
 				stillRemaining = true;
 
 				auto c = displayFilename[i];
-				if (seenLetters.find(c) == seenLetters.end())
+				if (seenLetters.find(c) == seenLetters.end() && iswalpha(c))
 				{
 					displayFilename.replace(i, 1, concat(L"&", c));
 					seenLetters.insert(c);

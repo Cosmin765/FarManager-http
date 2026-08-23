@@ -871,6 +871,8 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 		osdd.httpTemplateFilenames.clear();
 		osdd.selectedIndices.clear();
 
+		size_t priorityItemsCount = 0;
+
 		for (const auto& item : pp.Items)
 		{
 			HTTPTemplate httpTemplate;
@@ -900,6 +902,7 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 				osdd.selectedIndices.push_front(true);
 				httpTemplates.push_front(httpTemplate);
 				osdd.httpTemplateFilenames.push_front(item.FileName);
+				++priorityItemsCount;
 			}
 			else
 			{
@@ -907,6 +910,13 @@ int HTTPclass::ProcessEditorKey(const INPUT_RECORD* Rec)
 				httpTemplates.push_back(httpTemplate);
 				osdd.httpTemplateFilenames.push_back(item.FileName);
 			}
+		}
+
+		if (priorityItemsCount >= 2)
+		{
+			// keep original order
+			std::reverse(httpTemplates.begin(), httpTemplates.begin() + priorityItemsCount);
+			std::reverse(osdd.httpTemplateFilenames.begin(), osdd.httpTemplateFilenames.begin() + priorityItemsCount);
 		}
 
 		if (HTTPDialogs::OpenSelection().ShowDialogEx(osdd) == HTTPDialogs::OK_ID)
